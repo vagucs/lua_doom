@@ -1,14 +1,30 @@
 # lua_doom
 
-![DOOM rodando em Lua com SDL2](screenshot/doom.png)
+![DOOM running on Lua with SDL2](screenshot/doom.png)
 
-**Vídeo:** [DOOM rodando em Lua](https://youtu.be/4OYTretHKtY)
+**Video:** [DOOM running in Lua](https://youtu.be/4OYTretHKtY)
 
-DOOM generic em Lua, a partir do [python_doom](https://github.com/vagucs/python_doom). O mesmo fonte roda no Lua 5.4 e no LuaJIT. A SDL2 fica atrás de uma API só. O LuaJIT chama a `SDL2.dll` pela FFI. O Lua 5.4 usa uma ponte pequena em C.
+DOOM generic ported from **[python_doom](https://github.com/vagucs/python_doom)** to **Lua 5.4 and LuaJIT + SDL2**.
 
-Ferramentas, já instaladas no MSYS2 UCRT64:
+By **Wagner Nunes da Silva**
 
-| Runtime | Executável |
+- vagucs@bol.com.br
+- vagucs@vagucs.com.br
+- vagucs@gmail.com
+- [www.vagucs.com.br](https://www.vagucs.com.br)
+- [LinkedIn](https://www.linkedin.com/in/wagner-nunes-da-silva-b0a15360)
+
+The same source runs on PUC-Rio Lua 5.4 and on LuaJIT. The game loop, the map, and the renderer stay in Lua. SDL2 sits behind one API. LuaJIT calls `SDL2.dll` through the FFI. Lua 5.4 uses a small C bridge (`src/video_c.c`).
+
+Versão em português: [README.pt.md](README.pt.md)
+
+---
+
+## How to run
+
+Tools, already installed on MSYS2 UCRT64:
+
+| Runtime | Executable |
 | --- | --- |
 | Lua 5.4.9 (PUC-Rio) | `C:\msys64\ucrt64\bin\lua5.4.exe` |
 | LuaJIT 2.1 | `C:\msys64\ucrt64\bin\luajit.exe` |
@@ -19,40 +35,56 @@ run.bat
 run.bat jit
 ```
 
-`run.bat` abre a janela com o Lua 5.4. `run.bat jit` abre a mesma cena com o LuaJIT. Os dois aceitam os parâmetros depois: `run.bat -warp 1 1 -skill 2` e `run.bat jit -warp 1 1`. O título toca música. Esc ou Enter abre o menu. A skill abre a vista, sem derreter, e a música da fase fica em loop. A barra de baixo mostra vida, munição, armas, chaves e o rosto. Setas andam e viram, Shift corre, Ctrl atira, Espaço usa. O mouse olha e o botão esquerdo atira. `-` e `=` mudam o tamanho da tela; no automapa, aproximam. Tab abre o mapa, `f` segue o jogador, `g` liga a grade, `0` mostra o mapa inteiro. O tiro, a porta e o monstro tocam o efeito. Os inimigos olham, perseguem e caem. A chave no chão abre a porta trancada. O interruptor de saída derrete a tela para a contagem e segue para a fase seguinte. No fim do episódio o texto sobe no flat e, no Enter, volta ao título. Save e Load usam `doomsav0.dsg` até `doomsav5.dsg`, ao lado do IWAD. Os cheats são os de sempre: `iddqd`, `idkfa`, `idfa`, `idclip`, `idspispopd`, `iddt`, `idbehold`, `idchoppers`, `idmypos`, `idclev` e `idmus`. `-fps` escreve os quadros, `-crt` liga o tubo. Sair está no item do menu, ou no fechar da janela. A recompilação da ponte, só quando `src\video_c.c` muda, é `build_video.bat`.
+`run.bat` opens the window with Lua 5.4. `run.bat jit` opens the same scene with LuaJIT. Extra arguments are forwarded: `run.bat -warp 1 1 -skill 2` and `run.bat jit -warp 1 1`. The title plays music. Esc or Enter opens the menu. Choosing a skill opens the view, without a melt, and the level music loops. The bottom bar shows health, ammo, weapons, keys, and the face. Arrows walk and turn, Shift runs, Ctrl fires, Space uses. The mouse looks and the left button fires. `-` and `=` change the view size; on the automap they zoom. Tab opens the map, `f` follows the player, `g` toggles the grid, `0` shows the whole map. A shot, a door, and a monster play their sounds. Enemies look, chase, and fall. A key on the floor opens the locked door. The exit switch melts into the tally and then the next map. At the end of the episode the text scrolls on the flat and, on Enter, returns to the title. Save and Load use `doomsav0.dsg` through `doomsav5.dsg`, next to the IWAD. The cheats are the usual ones: `iddqd`, `idkfa`, `idfa`, `idclip`, `idspispopd`, `iddt`, `idbehold`, `idchoppers`, `idmypos`, `idclev`, and `idmus`. `-fps` prints the frame rate, `-crt` turns on the tube. Quit is the menu item, or closing the window. Rebuild the bridge, only when `src\video_c.c` changes, with `build_video.bat`.
 
-O motor é escrito no dialeto comum (Lua 5.1). Sem `//`, sem `&` `|` `<<` `>>`, sem `ffi` fora de `video_ffi.lua`. Índice de WAD, BSP e menu continua 0-based no dado e é lido com `+ 1`.
+The engine is written in the common dialect (Lua 5.1). No `//`, no `&` `|` `<<` `>>`, and no `ffi` outside `video_ffi.lua`. WAD, BSP, and menu indexes stay 0-based in the data and are read with `+ 1`.
 
-Cada fase abaixo depende da anterior. O código de referência é `python_doom/doom/`.
+Each phase below depends on the one before it. The reference code is `python_doom/doom/`.
 
-## Fases
+## Phases
 
-1. **Compat.** Feito. `compat.lua` segue `compat.py`. `fixed_mul` parte em metades de 16 bits. `band` / `bor` / `bxor` / `shl` usam `bit.*` no LuaJIT e os operadores do Lua 5.4, carregados com `load` para o LuaJIT não analisar esse texto. Os dois executáveis passam em `test_compat.lua`.
+1. **Compat.** Done. `compat.lua` follows `compat.py`. `fixed_mul` splits into 16-bit halves. `band` / `bor` / `bxor` / `shl` use `bit.*` on LuaJIT and the Lua 5.4 operators, loaded with `load` so LuaJIT never parses that text. Both executables pass `test_compat.lua`.
 
-2. **WAD.** Feito. `wad.lua` segue `wad.py`. O número do lump continua 0-based. `PLAYPAL` (10752 bytes) e `TITLEPIC` (68168) saem do `DOOM1.WAD` nos dois executáveis, via `test_wad.lua`. Sem janela.
+2. **WAD.** Done. `wad.lua` follows `wad.py`. Lump numbers stay 0-based. `PLAYPAL` (10752 bytes) and `TITLEPIC` (68168) come out of `DOOM1.WAD` on both executables, through `test_wad.lua`. No window.
 
-3. **Janela.** Feito. `video.lua` escolhe o backend. `video_ffi.lua` no LuaJIT. `src/video_c.c` no Lua 5.4, em `video_c.dll`. Os dois abrem 640×400, esticam o framebuffer de 320×200 e leem o teclado. Esc fecha.
+3. **Window.** Done. `video.lua` picks the backend. `video_ffi.lua` on LuaJIT. `src/video_c.c` on Lua 5.4, as `video_c.dll`. Both open 640×400, stretch the 320×200 framebuffer, and read the keyboard. Esc closes.
 
-4. **Título.** Feito. `v_video.lua` segue `v_video.py`. `run.bat` mostra o `TITLEPIC` com a primeira `PLAYPAL`.
+4. **Title.** Done. `v_video.lua` follows `v_video.py`. `run.bat` shows `TITLEPIC` with the first `PLAYPAL`.
 
-5. **Laço e menu.** Feito. `main.lua` acumula `SDL_GetTicks` e chama o menu a 35 Hz. `menu.lua` segue `menu.py`. Esc ou Enter abre. Setas, Enter e Backspace navegam. No shareware o episódio aparece mesmo sem `E2M1`; os episódios 2 a 4 avisam a versão registrada. A skill escolhida escreve `EPISODIO n SKILL n` e o mapa não entra. Som fica mudo até a fase 12. Os dois executáveis passam em `test_menu.lua`.
+5. **Loop and menu.** Done. `main.lua` accumulates `SDL_GetTicks` and ticks the menu at 35 Hz. `menu.lua` follows `menu.py`. Esc or Enter opens it. Arrows, Enter, and Backspace navigate. On the shareware IWAD the episode menu appears even without `E2M1`; episodes 2 through 4 show the registered-version message. The chosen skill writes `EPISODIO n SKILL n` and does not enter the map yet. Sound stays silent until phase 12. Both executables pass `test_menu.lua`.
 
-6. **Mapa.** Feito. `world.lua` segue `world.py`. `E1M1` sai com 467 vértices, 475 linhas, 732 segs, 236 nodes, blockmap 36×23 e reject de 904 bytes, iguais ao Python. A skill limpa o menu e desenha as linhas vistas de cima, com a seta do jogador. O nome da textura fica guardado; o número entra na fase 7. Os dois executáveis passam em `test_world.lua`.
+6. **Map.** Done. `world.lua` follows `world.py`. `E1M1` comes out with 467 vertices, 475 lines, 732 segs, 236 nodes, a 36×23 blockmap, and a 904-byte reject, matching Python. Choosing a skill clears the menu and draws the lines from above, with the player arrow. Texture names are stored; the numbers arrive in phase 7. Both executables pass `test_world.lua`.
 
-7. **Texturas.** Feito. `r_data.lua` segue `r_data.py`. O shareware tem 125 texturas e 56 flats. `STARTAN2` é a textura 69, `FLOOR4_8` é o flat 10, `COLORMAP` tem 8704 bytes. A coluna composta de `BIGDOOR1` bate com o Python. A planta pinta cada linha com a cor mais comum da textura da parede, ou do flat do chão quando a linha não tem textura. Sprites ficam para a vista. Os dois executáveis passam em `test_r_data.lua`.
+7. **Textures.** Done. `r_data.lua` follows `r_data.py`. The shareware IWAD has 125 textures and 56 flats. `STARTAN2` is texture 69, `FLOOR4_8` is flat 10, `COLORMAP` is 8704 bytes. The composite column of `BIGDOOR1` matches Python. The overhead map paints each line with the most common color of the wall texture, or of the floor flat when the line has no texture. Sprites wait for the 3D view. Both executables pass `test_r_data.lua`.
 
-8. **Vista.** Feito. `render.lua` segue `render.py`, `tables.lua` segue `tables.py` e `sprites.lua` segue o desenho de `sprites.py`. No `E1M1`, de pé no ponto de partida e na skill média, o framebuffer de 320×200 é igual ao Python: 34 paredes, 100 planos, 91 coisas. A faixa de baixo fica vazia, no lugar da barra. Andar fica para a fase 9. Os dois executáveis passam em `test_view.lua`.
+8. **View.** Done. `render.lua` follows `render.py`, `tables.lua` follows `tables.py`, and `sprites.lua` follows the drawing in `sprites.py`. On `E1M1`, standing at the player start on medium skill, the 320×200 framebuffer matches Python: 34 walls, 100 planes, 91 things. The bottom band stays empty, where the status bar will go. Walking waits for phase 9. Both executables pass `test_view.lua`.
 
-9. **Jogador.** Feito. `player.lua` segue `player.py` e `collision.lua` segue o movimento, o uso e o tiro de `collision.py`. No `E1M1`, 35 tics andando para a frente param no mesmo ponto do Python, com a mesma velocidade. A pistola sobe na frente da vista e o quadro com ela é igual ao Python. Ctrl gasta um pente e o hitscan tira a mesma vida. A porta abre na fase 10. Os dois executáveis passam em `test_player.lua`.
+9. **Player.** Done. `player.lua` follows `player.py` and `collision.lua` follows movement, use, and hitscan from `collision.py`. On `E1M1`, 35 tics walking forward stop at the same point as Python, at the same speed. The pistol rises in front of the view and that frame matches Python. Ctrl spends one clip and the hitscan deals the same damage. Doors open in phase 10. Both executables pass `test_player.lua`.
 
-10. **Setores.** Feito. `specials.lua` segue `specials.py`. No `E1M1`, a primeira porta sobe de 0 a 3932160 em 30 tics, as luzes batem com o Python e o interruptor de saída troca a textura 100 pela 119. A saída desenha o `WIMAP0` e, no Enter ou depois de quatro segundos, entra na fase seguinte com a vida e as armas. A contagem e o melt ficam para a fase 13. A chave no chão abre a porta trancada. Os dois executáveis passam em `test_specials.lua`.
+10. **Sectors.** Done. `specials.lua` follows `specials.py`. On `E1M1`, the first door rises from 0 to 3932160 in 30 tics, the lights match Python, and the exit switch changes texture 100 to 119. The exit draws `WIMAP0` and, on Enter or after four seconds, enters the next map with health and weapons kept. The tally and the melt wait for phase 13. A key on the floor opens the locked door. Both executables pass `test_specials.lua`.
 
-11. **Inimigos.** Feito. `enemy.lua` segue `enemy.py` e `thinker.lua` segue `thinker.py`. No `E1M1`, 20 tics parado, os monstros ficam no mesmo lugar e no mesmo quadro do Python. Um zumbi morto cai no `POSS` quadro 12, com altura 917504. O foguete, o plasma e o BFG saem da arma. O som continua mudo. Os dois executáveis passam em `test_enemy.lua`.
+11. **Enemies.** Done. `enemy.lua` follows `enemy.py` and `thinker.lua` follows `thinker.py`. On `E1M1`, after 20 tics standing still, the monsters are in the same place and the same frame as Python. A dead zombie falls on `POSS` frame 12, at height 917504. The rocket, the plasma, and the BFG leave the weapon. Sound is still silent. Both executables pass `test_enemy.lua`.
 
-12. **Som.** Feito. `sound.lua` segue `sound.py` e `mus2mid.lua` segue `mus2mid.py`. O `D_E1M1` vira o mesmo MIDI do Python, 23334 bytes. O `DSPISTOL` vira as mesmas 5629 amostras. A ponte enfileira o PCM a 11025 Hz e o MIDI sai pelo MCI do Windows. O título toca `D_INTROA` no shareware. O `E1M1` fica em loop no `D_E1M1`. O tiro, a porta e o monstro tocam o `DS*`. Se a placa não abre, o jogo segue mudo. Os dois executáveis passam em `test_sound.lua`.
+12. **Sound.** Done. `sound.lua` follows `sound.py` and `mus2mid.lua` follows `mus2mid.py`. `D_E1M1` becomes the same MIDI as Python, 23334 bytes. `DSPISTOL` becomes the same 5629 samples. The bridge queues PCM at 11025 Hz and MIDI goes out through the Windows MCI. The title plays `D_INTROA` on the shareware IWAD. `E1M1` loops `D_E1M1`. A shot, a door, and a monster play `DS*`. If the device does not open, the game stays silent. Both executables pass `test_sound.lua`.
 
-13. **Barra, intermissão e melt.** Feito. `status.lua` segue `status.py`, `wi_stuff.lua` segue `wi_stuff.py` e `wipe.lua` segue `wipe.py`. A faixa de baixo mostra vida, munição, armas, chaves e o rosto, no mesmo desenho do Python. Ao sair da fase a tela derrete para a contagem: kills, itens, segredos, tempo e par. Enter, Espaço ou Ctrl aceleram e seguem para o mapa seguinte, que também derrete. Abrir um jogo novo a partir do título não derrete. A música da contagem é `D_INTER`. Os dois executáveis passam em `test_hud.lua`.
+13. **Status bar, intermission, and melt.** Done. `status.lua` follows `status.py`, `wi_stuff.lua` follows `wi_stuff.py`, and `wipe.lua` follows `wipe.py`. The bottom band shows health, ammo, weapons, keys, and the face, in the same drawing as Python. Leaving a level melts into the tally: kills, items, secrets, time, and par. Enter, Space, or Ctrl speed it up and continue to the next map, which also melts. Starting a new game from the title does not melt. The tally music is `D_INTER`. Both executables pass `test_hud.lua`.
 
-14. **Resto do python_doom.** Feito. `am_map.lua` segue `am_map.py`, `finale.lua` segue `finale.py`, `saveg.lua` segue `saveg.py` e `cheats.lua` segue os cheats de `game.py`. Tab abre o automapa. O mapa 8 do shareware escreve o `E1TEXT` em `FLOOR4_8` e derrete para a arte. Save e load gravam `doomsavN.dsg` com o cabeçalho `DOOMPY01`. O mouse entra na `ticcmd`. `-warp`, `-skill`, `-file`, `-iwad`, `-nomonsters`, `-fast`, `-respawn`, `-nosound`, `-nomusic`, `-fps` e `-crt` saem de `game.py`. `-` e `=` mudam o tamanho da vista. Os dois executáveis passam em `test_phase14.lua`.
+14. **The rest of python_doom.** Done. `am_map.lua` follows `am_map.py`, `finale.lua` follows `finale.py`, `saveg.lua` follows `saveg.py`, and `cheats.lua` follows the cheats in `game.py`. Tab opens the automap. Shareware map 8 writes `E1TEXT` on `FLOOR4_8` and melts into the art. Save and load write `doomsavN.dsg` with the `DOOMPY01` header. The mouse feeds `ticcmd`. `-warp`, `-skill`, `-file`, `-iwad`, `-nomonsters`, `-fast`, `-respawn`, `-nosound`, `-nomusic`, `-fps`, and `-crt` come from `game.py`. `-` and `=` change the view size. Both executables pass `test_phase14.lua`.
 
-Fora do corte do `python_doom`: rede, joystick, CD-Audio.
+Left out of the `python_doom` cut: network, joystick, CD audio.
+
+---
+
+## Donate
+
+### Ethereum
+
+`0x1b64038A2b1DB73ABd0068d8B9B0d1dC5a90C5F1`
+
+![Ethereum QR Code](docs/qr-ethereum.png)
+
+### PIX
+
+Key: `vagucs@bol.com.br`
+
+![PIX QR Code](docs/qr-pix.png)
