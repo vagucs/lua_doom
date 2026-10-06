@@ -1,0 +1,2 @@
+lua_doom: Lua 5.4  Setas andam. Shift corre. Ctrl atira. Espaco usa
+texturas 125  flats 56
