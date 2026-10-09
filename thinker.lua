@@ -98,7 +98,14 @@ function M.spawn_mobj(world, x, y, z, typ, game)
   end
   world.mobjs[#world.mobjs + 1] = mo
   collision.set_thing_position(world, mo)
-  M.set_mobj_state(mo, row[info.MI_SPAWNSTATE], world, game)
+  local stnum = row[info.MI_SPAWNSTATE]
+  local st = info.STATES[stnum]
+  if st ~= nil then
+    mo.istate = stnum
+    mo.tics = st[2]
+    mo.sprite = info.SPRNAMES[st[0]]
+    mo.frame = st[1]
+  end
   return mo
 end
 

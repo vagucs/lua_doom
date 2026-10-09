@@ -319,6 +319,28 @@ local function same_species(target, other)
   return target.type == MT_BRUISER and other.type == MT_KNIGHT
 end
 
+function M.missile_reaches(mo, other, x, y, z)
+  if other == mo or other == mo.target then
+    return false
+  end
+  if (other.health or 0) <= 0 or not has(other.flags, MF_SHOOTABLE) then
+    return false
+  end
+  local reach = (other.radius or 0) + (mo.radius or 0)
+  if math.abs(other.x - x) >= reach or math.abs(other.y - y) >= reach then
+    return false
+  end
+  local slack = 64 * FRACUNIT
+  local z1 = z + (mo.momz or 0)
+  local low = math.min(z, z1) - slack
+  local high = math.max(z, z1) + (mo.height or 0) + slack
+  if mo.floorz ~= nil and z <= mo.floorz then
+    low = math.min(low, mo.floorz - slack)
+    high = math.max(high, mo.floorz + slack)
+  end
+  return low <= other.z + (other.height or 0) and high >= other.z
+end
+
 local function pit_thing(world, tm, other, game)
   if not has(other.flags, MF_SOLID + MF_SPECIAL + MF_SHOOTABLE) then
     return true
@@ -340,9 +362,6 @@ local function pit_thing(world, tm, other, game)
     return false
   end
   if has(tm.flags, MF_MISSILE) then
-    if tm.z > other.z + (other.height or 0) or tm.z + (tm.height or 0) < other.z then
-      return true
-    end
     local target = tm.target
     if target and same_species(target, other) then
       if other == target then
@@ -355,11 +374,10 @@ local function pit_thing(world, tm, other, game)
     if not has(other.flags, MF_SHOOTABLE) then
       return not has(other.flags, MF_SOLID)
     end
-    local dmg = ((rng.p_random() % 8) + 1) * (tm.damage or 0)
-    if game and game.damage_mobj then
-      local src = tm.target or tm
-      game.damage_mobj(other, src, dmg, tm)
+    if not M.missile_reaches(tm, other, tm._tmx, tm._tmy, tm.z) then
+      return true
     end
+    tm.struck = other
     return false
   end
   if has(other.flags, MF_SPECIAL) then
@@ -757,6 +775,53 @@ local function hit_slide_line(thing, line, tmx, tmy)
   return fixed_mul(newlen, tables.fine_cos(lineangle)), fixed_mul(newlen, tables.fine_sin(lineangle))
 end
 
+local function slide_blocks(thing, li)
+  if not has(li.flags, ML_TWOSIDED) or li.backsector == nil then
+    return M.point_on_line_side(thing.x, thing.y, li) == 0
+  end
+  local opentop, openbottom = M.line_opening(li)
+  if opentop - openbottom < thing.height then
+    return true
+  end
+  if opentop - thing.z < thing.height then
+    return true
+  end
+  if openbottom - thing.z > 24 * FRACUNIT then
+    return true
+  end
+  return has(li.flags, ML_BLOCKING)
+end
+
+local function intercept_frac(x1, y1, x2, y2, line)
+  local u = FRACUNIT
+  local ax, ay = x1 / u, y1 / u
+  local bx, by = x2 / u, y2 / u
+  local cx, cy = line.v1.x / u, line.v1.y / u
+  local dx, dy = line.v2.x / u, line.v2.y / u
+  local den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx)
+  if math.abs(den) < 1e-8 then
+    return -1
+  end
+  local t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den
+  local v = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den
+  if t < 0 or t > 1 or v < 0 or v > 1 then
+    return -1
+  end
+  return math.floor(t * u)
+end
+
+local function trace_slide_corner(world, thing, x1, y1, x2, y2, best)
+  local lines = world.lines
+  for i = 1, #lines do
+    local ln = lines[i]
+    local frac = intercept_frac(x1, y1, x2, y2, ln)
+    if frac >= 0 and frac <= FRACUNIT and slide_blocks(thing, ln) and frac < best[1] then
+      best[1] = frac
+      best[2] = ln
+    end
+  end
+end
+
 function M.slide_move(world, thing, momx, momy, game)
   if math.abs(momx) > MAXMOVE then
     if momx > 0 then
@@ -797,37 +862,10 @@ function M.slide_move(world, thing, momx, momy, game)
       traily = thing.y + thing.radius
     end
     local best = { FRACUNIT + 1, nil }
-    local function slide_trav(inn)
-      local li = inn.line
-      local blocking = false
-      if not has(li.flags, ML_TWOSIDED) then
-        if M.point_on_line_side(thing.x, thing.y, li) ~= 0 then
-          return true
-        end
-        blocking = true
-      else
-        local opentop, openbottom = M.line_opening(li)
-        if opentop - openbottom < thing.height then
-          blocking = true
-        elseif opentop - thing.z < thing.height then
-          blocking = true
-        elseif openbottom - thing.z > 24 * FRACUNIT then
-          blocking = true
-        end
-      end
-      if not blocking then
-        return true
-      end
-      if inn.frac < best[1] then
-        best[1] = inn.frac
-        best[2] = li
-      end
-      return false
-    end
     local mx, my = thing.momx, thing.momy
-    M.path_traverse(world, leadx, leady, leadx + mx, leady + my, PT_ADDLINES, slide_trav)
-    M.path_traverse(world, trailx, leady, trailx + mx, leady + my, PT_ADDLINES, slide_trav)
-    M.path_traverse(world, leadx, traily, leadx + mx, traily + my, PT_ADDLINES, slide_trav)
+    trace_slide_corner(world, thing, leadx, leady, leadx + mx, leady + my, best)
+    trace_slide_corner(world, thing, trailx, leady, trailx + mx, leady + my, best)
+    trace_slide_corner(world, thing, leadx, traily, leadx + mx, traily + my, best)
     if best[1] == FRACUNIT + 1 or best[2] == nil then
       stairstep(world, thing, game)
       return
@@ -964,6 +1002,19 @@ end
 function M.aim_line_attack(world, source, angle, attackrange)
   local _, target = aim(world, source, angle, attackrange)
   return target
+end
+
+function M.missile_aim(world, source, span)
+  local base = source.angle
+  span = span or (16 * 64 * FRACUNIT)
+  local angles = { base, as_u32(base + 67108864), as_u32(base - 67108864) }
+  for i = 1, 3 do
+    local slope, target = aim(world, source, angles[i], span)
+    if target then
+      return angles[i], slope
+    end
+  end
+  return base, 0
 end
 
 function M.bullet_slope(world, source)

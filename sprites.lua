@@ -30,6 +30,7 @@ local SCREENWIDTH = 320
 local FINEANGLES = 8192
 local ANG45 = 536870912
 local MF_SHADOW = 262144
+local MF_NOSECTOR = 8
 local MINZ = 4 * FRACUNIT
 local MAX_SPRITE_FRAMES = 29
 local SIL_TOP = 1
@@ -502,7 +503,7 @@ function M.draw(renderer, world, fb)
   local vis = {}
   for i = 1, #world.mobjs do
     local mo = world.mobjs[i]
-    if mo.sprite and mo.sprite ~= "" and not mo.player then
+    if mo.sprite and mo.sprite ~= "" and not mo.player and band(mo.flags or 0, MF_NOSECTOR) == 0 then
       local item = project(renderer, mo)
       if item then
         vis[#vis + 1] = item

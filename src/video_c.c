@@ -416,6 +416,12 @@ static int l_audio_queue(lua_State *L) {
   return 0;
 }
 
+static int l_audio_clear(lua_State *L) {
+  (void)L;
+  if (audio_dev) SDL_ClearQueuedAudio(audio_dev);
+  return 0;
+}
+
 static int l_audio_close(lua_State *L) {
   (void)L;
   if (audio_dev) {
@@ -489,6 +495,7 @@ static const luaL_Reg regs[] = {
   {"ticks", l_ticks},
   {"audio_open", l_audio_open},
   {"audio_queue", l_audio_queue},
+  {"audio_clear", l_audio_clear},
   {"audio_close", l_audio_close},
   {"music_open", l_music_open},
   {"music_status", l_music_status},

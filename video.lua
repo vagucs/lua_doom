@@ -90,6 +90,12 @@ function M.audio_queue(pcm)
   end
 end
 
+function M.audio_clear()
+  if raw.audio_clear then
+    raw.audio_clear()
+  end
+end
+
 function M.audio_close()
   if raw.audio_close then
     raw.audio_close()

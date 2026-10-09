@@ -744,21 +744,21 @@ end
 function M.vertical_door(self, line, thing)
   local player = thing and thing.player
   local spec = line.special
-  if (spec == 26 or spec == 32 or spec == 99 or spec == 133) and player then
+  if (spec == 26 or spec == 32) and player then
     if not player.cards[IT_BLUECARD] and not player.cards[IT_BLUESKULL] then
       player.message = "You need a blue key to open this door"
       play(self, "oof")
       return
     end
   end
-  if (spec == 27 or spec == 34 or spec == 136 or spec == 137) and player then
+  if (spec == 27 or spec == 34) and player then
     if not player.cards[IT_YELLOWCARD] and not player.cards[IT_YELLOWSKULL] then
       player.message = "You need a yellow key to open this door"
       play(self, "oof")
       return
     end
   end
-  if (spec == 28 or spec == 33 or spec == 134 or spec == 135) and player then
+  if (spec == 28 or spec == 33) and player then
     if not player.cards[IT_REDCARD] and not player.cards[IT_REDSKULL] then
       player.message = "You need a red key to open this door"
       play(self, "oof")
@@ -775,11 +775,36 @@ function M.vertical_door(self, line, thing)
     line.special = 0
   elseif spec == 117 then
     dtype = VLD_BLAZERAISE
-  elseif spec == 118 or spec == 99 or spec == 133 or spec == 134 or spec == 135 or spec == 136 or spec == 137 then
+  elseif spec == 118 then
     dtype = VLD_BLAZEOPEN
     line.special = 0
   end
   spawn_door(self, side.sector, dtype, false)
+end
+
+function M.locked_blaze_door(self, line, thing, spec)
+  local player = thing and thing.player
+  if not player then
+    return
+  end
+  if (spec == 99 or spec == 133) and not player.cards[IT_BLUECARD] and not player.cards[IT_BLUESKULL] then
+    player.message = "You need a blue key to open this door"
+    play(self, "oof")
+    return
+  end
+  if (spec == 136 or spec == 137) and not player.cards[IT_YELLOWCARD] and not player.cards[IT_YELLOWSKULL] then
+    player.message = "You need a yellow key to open this door"
+    play(self, "oof")
+    return
+  end
+  if (spec == 134 or spec == 135) and not player.cards[IT_REDCARD] and not player.cards[IT_REDSKULL] then
+    player.message = "You need a red key to open this door"
+    play(self, "oof")
+    return
+  end
+  if M.do_door(self, line, VLD_BLAZEOPEN, false) then
+    M.change_switch(self, line, spec == 99 or spec == 134 or spec == 136)
+  end
 end
 
 function M.do_plat_dwus(self, line, blaze)
@@ -1228,9 +1253,12 @@ function M.use_special(self, line, thing, side)
   end
   local spec = line.special
   if spec == 1 or spec == 26 or spec == 27 or spec == 28 or spec == 31 or spec == 32
-    or spec == 33 or spec == 34 or spec == 99 or spec == 117 or spec == 118
-    or spec == 133 or spec == 134 or spec == 135 or spec == 136 or spec == 137 then
+    or spec == 33 or spec == 34 or spec == 117 or spec == 118 then
     M.vertical_door(self, line, thing)
+    return true
+  end
+  if spec == 99 or spec == 133 or spec == 134 or spec == 135 or spec == 136 or spec == 137 then
+    M.locked_blaze_door(self, line, thing, spec)
     return true
   end
   if spec == 11 then
@@ -1260,7 +1288,7 @@ function M.use_special(self, line, thing, side)
     [23] = function() return M.do_floor(self, line, lowest_floor, -1) end,
     [71] = function() return M.do_floor(self, line, highest_floor, -1) end,
     [101] = function() return M.do_floor(self, line, raise_floor_dest, 1) end,
-    [102] = function() return M.do_floor(self, line, function(s) return s.floorheight - 8 * FRACUNIT end, -1) end,
+    [102] = function() return M.do_floor(self, line, highest_floor, -1) end,
     [7] = function() return M.do_stairs(self, line, 8 * FRACUNIT, math.floor(FLOORSPEED / 4)) end,
     [127] = function() return M.do_stairs(self, line, 16 * FRACUNIT, FLOORSPEED * 4) end,
     [41] = function() return M.do_crusher(self, line, CEIL_LOWERTOFLOOR) end,
@@ -1283,7 +1311,7 @@ function M.use_special(self, line, thing, side)
     [116] = function() return door(VLD_BLAZECLOSE) end,
     [120] = function() return M.do_plat_dwus(self, line, true) end,
     [123] = function() return M.do_plat_dwus(self, line, true) end,
-    [45] = function() return M.do_floor(self, line, function(s) return s.floorheight - 8 * FRACUNIT end, -1) end,
+    [45] = function() return M.do_floor(self, line, highest_floor, -1) end,
     [60] = function() return M.do_floor(self, line, lowest_floor, -1) end,
     [64] = function() return M.do_floor(self, line, raise_floor_dest, 1) end,
     [70] = function() return M.do_floor(self, line, highest_floor, -1, FLOORSPEED * 4) end,

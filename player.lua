@@ -174,7 +174,7 @@ local WEAPON_ATK = {
   },
   [WP_PLASMA] = {
     { "PLSGA0", 3, true, "PLSFA0", 4, 1 },
-    { "PLSGB0", 20, false, "", 0, 0 },
+    { "PLSGB0", 20, false, "", 0, 0, true },
   },
   [WP_BFG] = {
     { "BFGGA0", 20, false, "", 0, 0 },
@@ -554,7 +554,12 @@ local function do_shot(player, game, ammo_type)
   if mo and (weapon == WP_MISSILE or weapon == WP_PLASMA or weapon == WP_BFG) then
     local enemy = require("enemy")
     if weapon == WP_PLASMA then
-      rng.p_random()
+      if band(rng.p_random(), 1) ~= 0 then
+        player.psprite_flash = "PLSFB0"
+      else
+        player.psprite_flash = "PLSFA0"
+      end
+      player.flash_tics = 4
     end
     if weapon == WP_MISSILE then
       enemy.spawn_player_missile(game.world, mo, "rocket")
@@ -684,22 +689,26 @@ local function enter_atk_step(player, game, ammo_type, firing, can_fire)
       end
     else
       local row = seq[player.psprite_step + 1]
-      player.psprite_body = row[1]
-      player.psprite_tics = row[2]
-      if row[5] ~= 0 then
-        player.psprite_flash = row[4]
-        player.flash_tics = row[5]
+      if row[7] and firing and can_fire and player.pendingweapon == WP_NOCHANGE and (player.health or 0) > 0 then
+        player.psprite_step = 0
+      else
+        player.psprite_body = row[1]
+        player.psprite_tics = row[2]
+        if row[5] ~= 0 then
+          player.psprite_flash = row[4]
+          player.flash_tics = row[5]
+        end
+        if row[6] ~= 0 then
+          player.extralight = row[6]
+        end
+        if row[3] then
+          do_shot(player, game, ammo_type)
+        end
+        if row[2] > 0 then
+          return
+        end
+        player.psprite_step = player.psprite_step + 1
       end
-      if row[6] ~= 0 then
-        player.extralight = row[6]
-      end
-      if row[3] then
-        do_shot(player, game, ammo_type)
-      end
-      if row[2] > 0 then
-        return
-      end
-      player.psprite_step = player.psprite_step + 1
     end
   end
 end

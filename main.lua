@@ -397,6 +397,7 @@ function game.start_level(self)
   if self.status and self.player then
     status_mod.reset(self.status, self.player)
   end
+  sound_mod.cut_sfx(sound)
   sound_mod.play_level_music(sound, self.episode, self.mapn)
   self.gamestate = "view"
   self.leveltime = 0

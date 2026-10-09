@@ -57,6 +57,7 @@ void SDL_PauseAudioDevice(unsigned int dev, int pause_on);
 void SDL_CloseAudioDevice(unsigned int dev);
 int SDL_QueueAudio(unsigned int dev, const void *data, unsigned int len);
 unsigned int SDL_GetQueuedAudioSize(unsigned int dev);
+void SDL_ClearQueuedAudio(unsigned int dev);
 unsigned int mciSendStringW(const uint16_t *cmd, uint16_t *ret, unsigned int retlen, void *wnd);
 int MultiByteToWideChar(unsigned int cp, unsigned long flags, const char *src, int srclen, uint16_t *dst, int dstlen);
 int WideCharToMultiByte(unsigned int cp, unsigned long flags, const uint16_t *src, int srclen, char *dst, int dstlen, const char *defchar, int *used);
@@ -460,6 +461,12 @@ local function audio_queue(pcm)
   SDL.SDL_QueueAudio(audio_dev, ffi.cast("const void*", pcm), #pcm)
 end
 
+local function audio_clear()
+  if audio_dev ~= 0 then
+    SDL.SDL_ClearQueuedAudio(audio_dev)
+  end
+end
+
 local function audio_close()
   if audio_dev ~= 0 then
     SDL.SDL_CloseAudioDevice(audio_dev)
@@ -511,6 +518,7 @@ return {
   ticks = ticks,
   audio_open = audio_open,
   audio_queue = audio_queue,
+  audio_clear = audio_clear,
   audio_close = audio_close,
   music_open = music_open,
   music_status = music_status,

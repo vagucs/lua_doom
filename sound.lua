@@ -334,6 +334,13 @@ function M.update(self)
   end
 end
 
+function M.cut_sfx(self)
+  self.voices = {}
+  if video.audio_clear then
+    video.audio_clear()
+  end
+end
+
 function M.shutdown(self)
   M.stop_music(self)
   self.voices = {}

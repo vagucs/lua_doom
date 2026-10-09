@@ -622,7 +622,7 @@ function M.spawn_player_missile(world, source, kind)
   elseif kind == "plasma" then
     typ = info.MT_PLASMA
   end
-  local ang = source.angle
+  local ang, slope = collision.missile_aim(world, source, 16 * 64 * FRACUNIT)
   local row = info.MOBJINFO[typ]
   local spd = row[info.MI_SPEED]
   local mo = thinker.spawn_mobj(world, source.x, source.y, source.z + 32 * FRACUNIT, typ, nil)
@@ -630,7 +630,7 @@ function M.spawn_player_missile(world, source, kind)
   mo.angle = ang
   mo.momx = fixed_mul(spd, tables.fine_cos(ang))
   mo.momy = fixed_mul(spd, tables.fine_sin(ang))
-  mo.momz = 0
+  mo.momz = fixed_mul(spd, slope)
   check_missile_spawn(mo)
   return mo
 end
@@ -662,9 +662,51 @@ local function radius_attack(world, spot, source, damage, game)
   end
 end
 
+local function same_species(target, other)
+  if target == nil or other == nil or target.type == nil or other.type == nil then
+    return false
+  end
+  if target.type == other.type then
+    return true
+  end
+  if target.type == info.MT_KNIGHT and other.type == info.MT_BRUISER then
+    return true
+  end
+  return target.type == info.MT_BRUISER and other.type == info.MT_KNIGHT
+end
+
+local function missile_victim(world, mo)
+  local spots = { { mo.x, mo.y, mo.z } }
+  if mo._tmx ~= nil and (mo._tmx ~= mo.x or mo._tmy ~= mo.y) then
+    spots[#spots + 1] = { mo._tmx, mo._tmy, mo.z }
+  end
+  local best, best_dist = nil, 2147483647
+  for i = 1, #world.mobjs do
+    local other = world.mobjs[i]
+    if mo.target and same_species(mo.target, other) and other ~= mo.target and other.type ~= info.MT_PLAYER then
+    else
+      for s = 1, #spots do
+        local spot = spots[s]
+        if collision.missile_reaches(mo, other, spot[1], spot[2], spot[3]) then
+          local dist = math.max(math.abs(other.x - spot[1]), math.abs(other.y - spot[2]))
+          if dist < best_dist then
+            best_dist = dist
+            best = other
+          end
+        end
+      end
+    end
+  end
+  return best
+end
+
 function M.explode_missile(world, mo, game, hit)
   local thinker = require("thinker")
-  if hit ~= nil then
+  if hit == nil then
+    hit = mo.struck or missile_victim(world, mo)
+  end
+  mo.struck = nil
+  if hit ~= nil and game and game.damage_mobj then
     local src = mo.target or mo
     local dmg = mo.damage or mi(mo)[info.MI_DAMAGE]
     game.damage_mobj(hit, src, dmg * ((rng.p_random() % 8) + 1), mo)
