@@ -190,6 +190,7 @@ local function apply_carry(player, prev)
   player.cards = { [0] = false, false, false, false, false, false }
   player.damagecount = 0
   player.bonuscount = 0
+  player.backpack = 0
   player.extralight = 0
   player.playerstate = 0
 end
@@ -203,8 +204,8 @@ local function lump_patch(name)
 end
 
 function game.touch_special(special, toucher)
-  if player_mod.take_key(special, toucher) and game.world then
-    collision.unset_thing_position(game.world, special)
+  if player_mod.take_key(special, toucher, game) and game.world then
+    thinker.remove_mobj(game.world, special)
   end
 end
 
