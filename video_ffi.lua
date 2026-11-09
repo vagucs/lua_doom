@@ -63,8 +63,19 @@ int MultiByteToWideChar(unsigned int cp, unsigned long flags, const char *src, i
 int WideCharToMultiByte(unsigned int cp, unsigned long flags, const uint16_t *src, int srclen, char *dst, int dstlen, const char *defchar, int *used);
 ]]
 
-local WINMM = ffi.load("winmm")
-local K32 = ffi.load("kernel32")
+local WINMM
+local K32
+
+if ffi.os == "Windows" then
+    -- No Windows, carrega as duas DLLs específicas
+    WINMM = ffi.load("winmm")
+    K32 = ffi.load("kernel32")
+else
+    -- No Linux e macOS, a biblioteca padrão C (ffi.C) substitui ambas
+    -- para funções do sistema (como sleep, timers, e entrada/saída)
+    WINMM = ffi.C
+    K32 = ffi.C
+end
 
 local INIT = 32
 local CENTERED = 805240832
@@ -104,18 +115,29 @@ local function fail(what)
 end
 
 local function wide_cmd(cmd)
-  local n = #cmd
-  local buf = ffi.new("uint16_t[?]", n + 1)
-  K32.MultiByteToWideChar(65001, 0, cmd, -1, buf, n + 1)
-  return buf
+  if ffi.os == "Windows" then
+    local n = #cmd
+    local buf = ffi.new("uint16_t[?]", n + 1)
+    K32.MultiByteToWideChar(65001, 0, cmd, -1, buf, n + 1)
+    return buf
+  else
+    return nil
+  end
 end
 
 local function mci(cmd, ret)
-  return WINMM.mciSendStringW(wide_cmd(cmd), ret, ret and 64 or 0, nil)
+  if ffi.os == "Windows" then
+    return WINMM.mciSendStringW(wide_cmd(cmd), ret, ret and 64 or 0, nil)
+  else
+    -- No Linux/macOS, ignora a chamada retornando 0 (sucesso simulado)
+    return 0
+  end
 end
 
 local function music_close()
-  mci("close doommus", nil)
+  if ffi.os == "Windows" then
+    mci("close doommus", nil)
+  end
 end
 
 local function shutdown()
@@ -486,6 +508,10 @@ local function music_open(path)
 end
 
 local function music_status()
+  if ffi.os ~= "Windows" then
+    return ""
+  end
+
   local buf = ffi.new("uint16_t[64]")
   if mci("status doommus mode", buf) ~= 0 then
     return ""
