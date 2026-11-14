@@ -68,6 +68,9 @@ local function take_args(argv)
     elseif a == "-skill" and argv[i + 1] then
       out.skill = tonumber(argv[i + 1]) or 2
       i = i + 2
+    elseif a == "-scale" then
+      out.scale = tonumber(argv[i + 1]) or 2
+      i = i + 1
     elseif a == "-file" then
       i = i + 1
       while argv[i] and argv[i]:sub(1, 1) ~= "-" do
@@ -138,6 +141,7 @@ local game = {
   sound = sound,
   skill = opts.skill,
   episode = opts.episode,
+  scale = opts.scale,
   mapn = opts.mapn,
   warp = opts.warp,
   show_fps = opts.show_fps,
@@ -435,7 +439,8 @@ local runtime = jitlib and ("luajit " .. tostring(jitlib.version)) or _VERSION
 print("lua_doom: " .. runtime .. "  Tab abre o mapa, o texto final conta a historia")
 print("texturas " .. #res.textures .. "  flats " .. #res.flattranslation)
 
-video.init(v.SCREENWIDTH, v.SCREENHEIGHT, 2, "DOOM (" .. runtime .. ")")
+print(game.scale)
+video.init(v.SCREENWIDTH, v.SCREENHEIGHT, game.scale, "DOOM (" .. runtime .. ")")
 video.set_palette(pal)
 video.set_crt(game.crt)
 sound_mod.init(sound, w)
