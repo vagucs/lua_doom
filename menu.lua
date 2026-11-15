@@ -287,7 +287,8 @@ local function do_action(self, action, choice)
     else
       vol = math.max(0, vol - 1)
     end
-    self.sound.music_volume = vol
+    self.sound.set_music_volume(vol)
+
   elseif action == "episode" then
     if not has(self, "E2M1") and choice ~= 0 then
       self.message = "ONLY AVAILABLE IN THE REGISTERED VERSION."

@@ -22,6 +22,14 @@ local shar = compat.shar
 local as_u32 = compat.as_u32
 local fixed_mul = compat.fixed_mul
 
+local PW_ALLMAP = 4
+local MF_DROPPED = 131072
+local MF_COUNTITEM = 8388608
+local MAXBONUS = 200
+local BONUSADD = 6
+
+
+
 local FRACUNIT = 65536
 local ANG90 = 1073741824
 local ANG180 = 2147483648
@@ -298,6 +306,7 @@ function M.spawn(world, start, cheats)
     armortype = 0,
     ammo = { [0] = 50, 0, 0, 0 },
     maxammo = { [0] = 200, 50, 300, 50 },
+    clipammo = { [0] = 10, 4, 20, 1},
     weaponowned = { [0] = true, true, false, false, false, false, false, false, false },
     pendingweapon = WP_NOCHANGE,
     readyweapon = WP_PISTOL,
@@ -1137,22 +1146,453 @@ local KEY_CARD = {
   [39] = 4,
   [38] = 5,
 }
+-- P_GiveAmmo
+function M.give_ammo(player, ammo_type, num, skill)
+  if ammo_type == nil then
+    return false
+  end
 
-function M.take_key(special, toucher)
-  local player = toucher and toucher.player
+  local current = player.ammo[ammo_type]
+  local maximum = player.maxammo[ammo_type]
+  local clip = player.clipammo[ammo_type]
+
+  if current == nil or maximum == nil or clip == nil then
+    return false
+  end
+
+  if current >= maximum then
+    return false
+  end
+
+  local amount
+
+  if num ~= nil and num ~= 0 then
+    amount = num * clip
+  else
+    amount = math.floor(clip / 2)
+  end
+
+  -- Baby e Nightmare.
+  if skill == 0 or skill == 4 then
+    amount = amount * 2
+  end
+
+  local oldammo = current
+
+  player.ammo[ammo_type] = math.min(
+    current + amount,
+    maximum
+  )
+
+  -- Já possuía munição: não troca de arma.
+  if oldammo > 0 then
+    return true
+  end
+
+  -- Seleção automática de arma.
+  if ammo_type == AM_CLIP then
+    if player.readyweapon == WP_FIST then
+      if player.weaponowned[WP_CHAINGUN] then
+        player.pendingweapon = WP_CHAINGUN
+      else
+        player.pendingweapon = WP_PISTOL
+      end
+    end
+
+  elseif ammo_type == AM_SHELL then
+    if player.readyweapon == WP_FIST
+      or player.readyweapon == WP_PISTOL then
+
+      if player.weaponowned[WP_SHOTGUN] then
+        player.pendingweapon = WP_SHOTGUN
+      end
+    end
+
+  elseif ammo_type == AM_CELL then
+    if player.readyweapon == WP_FIST
+      or player.readyweapon == WP_PISTOL then
+
+      if player.weaponowned[WP_PLASMA] then
+        player.pendingweapon = WP_PLASMA
+      end
+    end
+
+  elseif ammo_type == AM_MISL then
+    if player.readyweapon == WP_FIST then
+      if player.weaponowned[WP_MISSILE] then
+        player.pendingweapon = WP_MISSILE
+      end
+    end
+  end
+
+  return true
+end
+
+
+-- P_GiveWeapon
+function M.give_weapon(player, weapon, dropped, skill)
+  local ammo_type = WEAPON_AMMO[weapon]
+
+  local gaveammo = false
+  local gaveweapon = false
+
+  if ammo_type ~= nil then
+    if dropped then
+      gaveammo = M.give_ammo(player, ammo_type, 1, skill)
+    else
+      gaveammo = M.give_ammo(player, ammo_type, 2, skill)
+    end
+  end
+
+  if not player.weaponowned[weapon] then
+    gaveweapon = true
+    player.weaponowned[weapon] = true
+    player.pendingweapon = weapon
+  end
+
+  return gaveweapon or gaveammo
+end
+
+
+-- P_GiveBody
+function M.give_body(player, amount)
+  if player.health >= MAXHEALTH then
+    return false
+  end
+
+  player.health = math.min(
+    player.health + amount,
+    MAXHEALTH
+  )
+
+  player.mo.health = player.health
+
+  return true
+end
+
+
+-- P_GiveArmor
+function M.give_armor(player, armor_type)
+  local hits = armor_type * 100
+
+  if player.armorpoints >= hits then
+    return false
+  end
+
+  player.armortype = armor_type
+  player.armorpoints = hits
+
+  return true
+end
+
+-- P_GiveCard
+function M.give_card(player, card)
+  if not player.cards[card] then
+    player.bonuscount = BONUSADD
+    player.cards[card] = true
+  end
+end
+
+
+-- P_TouchSpecialThing
+
+function M.touch_special(special, toucher, game)
+
+  if not special or not toucher then
+    return false
+  end
+
+  local player = toucher.player
+
   if not player or special.alive == false then
     return false
   end
-  local card = KEY_CARD[special.doomednum]
-  if card == nil then
+
+  -- Verifica alcance vertical.
+  local delta = special.z - toucher.z
+
+  if delta > toucher.height
+    or delta < -8 * FRACUNIT then
     return false
   end
-  player.cards[card] = true
+
+  -- Jogador morto não coleta.
+  if toucher.health <= 0 then
+    return false
+  end
+
+  local id = special.doomednum
+  local skill = game and game.skill or 2
+
+  local sound = "itemup"
+  local message = nil
+  local collected = false
+
+  ------------------------------------------------
+  -- ARMADURA
+  ------------------------------------------------
+
+  if id == 2018 then
+    collected = M.give_armor(player, 1)
+    message = "Picked up the armor."
+
+  elseif id == 2019 then
+    collected = M.give_armor(player, 2)
+    message = "Picked up the MegaArmor."
+
+  ------------------------------------------------
+  -- BONUS
+  ------------------------------------------------
+
+  elseif id == 2014 then
+    player.health = math.min(player.health + 1, MAXBONUS)
+    player.mo.health = player.health
+
+    collected = true
+    message = "Picked up a health bonus."
+
+  elseif id == 2015 then
+    player.armorpoints = math.min(
+      player.armorpoints + 1,
+      MAXBONUS
+    )
+
+    if player.armortype == 0 then
+      player.armortype = 1
+    end
+
+    collected = true
+    message = "Picked up an armor bonus."
+
+  elseif id == 2013 then
+    player.health = math.min(
+      player.health + 100,
+      MAXBONUS
+    )
+
+    player.mo.health = player.health
+
+    collected = true
+    message = "Supercharge!"
+
+    sound = "getpow"
+
+  ------------------------------------------------
+  -- CHAVES
+  ------------------------------------------------
+
+  elseif KEY_CARD[id] ~= nil then
+    local card = KEY_CARD[id]
+
+    if not player.cards[card] then
+      M.give_card(player, card)
+      message = "Picked up a key."
+    end
+
+    -- No single-player, chaves duplicadas
+    -- também desaparecem.
+    collected = true
+
+  ------------------------------------------------
+  -- VIDA
+  ------------------------------------------------
+
+  elseif id == 2011 then
+    collected = M.give_body(player, 10)
+    message = "Picked up a stimpack."
+
+  elseif id == 2012 then
+    collected = M.give_body(player, 25)
+
+    if player.health < 25 then
+      message = "Picked up a medikit that you REALLY need!"
+    else
+      message = "Picked up a medikit."
+    end
+
+  ------------------------------------------------
+  -- POWER UPS
+  ------------------------------------------------
+
+  elseif id == 2022 then
+    collected = M.give_power(player, PW_INVULNERABILITY)
+    message = "Invulnerability!"
+    sound = "getpow"
+
+  elseif id == 2023 then
+    collected = M.give_power(player, PW_STRENGTH)
+    message = "Berserk!"
+
+    if player.readyweapon ~= WP_FIST then
+      player.pendingweapon = WP_FIST
+    end
+
+    sound = "getpow"
+
+  elseif id == 2024 then
+    collected = M.give_power(player, PW_INVISIBILITY)
+    message = "Partial Invisibility!"
+    sound = "getpow"
+
+  elseif id == 2025 then
+    collected = M.give_power(player, PW_IRONFEET)
+    message = "Radiation Shielding Suit!"
+    sound = "getpow"
+
+  elseif id == 2026 then
+    collected = M.give_power(player, PW_ALLMAP)
+    message = "Computer Area Map!"
+    sound = "getpow"
+
+  elseif id == 2045 then
+    collected = M.give_power(player, PW_INFRARED)
+    message = "Light Amplification Visor!"
+    sound = "getpow"
+
+  ------------------------------------------------
+  -- MUNIÇÃO
+  ------------------------------------------------
+
+  elseif id == 2007 then
+    local dropped = has(special.flags, MF_DROPPED)
+
+    collected = M.give_ammo(
+      player, AM_CLIP,
+      dropped and 0 or 1,
+      skill
+    )
+
+    message = "Picked up a clip."
+
+  elseif id == 2048 then
+    collected = M.give_ammo(player, AM_CLIP, 5, skill)
+    message = "Picked up a box of bullets."
+
+  elseif id == 2008 then
+    collected = M.give_ammo(player, AM_SHELL, 1, skill)
+    message = "Picked up 4 shotgun shells."
+
+  elseif id == 2049 then
+    collected = M.give_ammo(player, AM_SHELL, 5, skill)
+    message = "Picked up a box of shells."
+
+  elseif id == 2010 then
+    collected = M.give_ammo(player, AM_MISL, 1, skill)
+    message = "Picked up a rocket."
+
+  elseif id == 2046 then
+    collected = M.give_ammo(player, AM_MISL, 5, skill)
+    message = "Picked up a box of rockets."
+
+  elseif id == 2047 then
+    collected = M.give_ammo(player, AM_CELL, 1, skill)
+    message = "Picked up an energy cell."
+
+  elseif id == 17 then
+    collected = M.give_ammo(player, AM_CELL, 5, skill)
+    message = "Picked up an energy cell pack."
+
+  ------------------------------------------------
+  -- MOCHILA
+  ------------------------------------------------
+
+  elseif id == 8 then
+
+    if not player.backpack then
+      for i = 0, 3 do
+        player.maxammo[i] = player.maxammo[i] * 2
+      end
+
+      player.backpack = true
+    end
+
+    for i = 0, 3 do
+      M.give_ammo(player, i, 1, skill)
+    end
+
+    collected = true
+    message = "Picked up a backpack."
+
+  ------------------------------------------------
+  -- ARMAS
+  ------------------------------------------------
+
+  elseif id == 2001 then
+    collected = M.give_weapon(player, WP_SHOTGUN, false, skill)
+    message = "You got the shotgun!"
+    sound = "wpnup"
+
+  elseif id == 2002 then
+    collected = M.give_weapon(
+      player, WP_CHAINGUN,
+      has(special.flags, MF_DROPPED),
+      skill
+    )
+
+    message = "You got the chaingun!"
+    sound = "wpnup"
+
+  elseif id == 2003 then
+    collected = M.give_weapon(player, WP_MISSILE, false, skill)
+    message = "You got the rocket launcher!"
+    sound = "wpnup"
+
+  elseif id == 2004 then
+    collected = M.give_weapon(player, WP_PLASMA, false, skill)
+    message = "You got the plasma rifle!"
+    sound = "wpnup"
+
+  elseif id == 2005 then
+    collected = M.give_weapon(player, WP_CHAINSAW, false, skill)
+    message = "A chainsaw!"
+    sound = "wpnup"
+
+  elseif id == 2006 then
+    collected = M.give_weapon(player, WP_BFG, false, skill)
+    message = "You got the BFG9000!"
+    sound = "wpnup"
+
+  else
+    return false
+  end
+
+  ------------------------------------------------
+  -- FINALIZAÇÃO
+  ------------------------------------------------
+
+  if not collected then
+    return false
+  end
+
+  if has(special.flags, MF_COUNTITEM) then
+    player.itemcount = player.itemcount + 1
+  end
+
   special.alive = false
   special.flags = 0
   special.sprite = ""
+
+  player.bonuscount = player.bonuscount + BONUSADD
+
+  if message then
+    M.set_message(player, message)
+  end
+
+  if game and game.start_sound then
+    game.start_sound(sound)
+  end
+
   return true
 end
+
+
+-- Mantém compatibilidade com chamadas antigas.
+function M.take_key(special, toucher, game)
+  return M.touch_special(special, toucher, game)
+end
+
+
+-- 
 
 M.WEAPONBOTTOM = WEAPONBOTTOM
 M.PST_DEAD = PST_DEAD

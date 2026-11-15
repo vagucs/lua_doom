@@ -13,10 +13,15 @@
 
 #define SDL_MAIN_HANDLED
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <mmsystem.h>
-#include <SDL.h>
 
+#ifdef _WIN32
+    #define EXPORT __declspec(dllexport)
+#else
+    #define EXPORT __attribute__((visibility("default")))
+#endif
+
+#include <SDL.h>
+#include <SDL_mixer.h>
 #include <lauxlib.h>
 #include <lua.h>
 
@@ -29,6 +34,8 @@ static SDL_Window *window = NULL;
 static SDL_Renderer *renderer = NULL;
 static SDL_Texture *texture = NULL;
 static SDL_PixelFormat *pixfmt = NULL;
+static Mix_Music *music = NULL;
+static int mixer_initialized = 0;
 static Uint32 *pixels = NULL;
 static Uint32 palette32[256];
 static int tex_w = 0;
@@ -69,18 +76,23 @@ static void crt_free(void) {
   crt_dh = 0;
 }
 
-static int mci_cmd(const char *cmd, wchar_t *ret, UINT retlen) {
-  wchar_t wide[2048];
-  if (MultiByteToWideChar(CP_UTF8, 0, cmd, -1, wide, 2048) <= 0) return 1;
-  return (int)mciSendStringW(wide, ret, retlen, NULL);
-}
-
 static void audio_stop(void) {
-  if (audio_dev) {
-    SDL_CloseAudioDevice(audio_dev);
-    audio_dev = 0;
-  }
-  mci_cmd("close doommus", NULL, 0);
+    if (audio_dev) {
+        SDL_CloseAudioDevice(audio_dev);
+        audio_dev = 0;
+    }
+
+    if (music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(music);
+        music = NULL;
+    }
+
+    if (mixer_initialized) {
+        Mix_CloseAudio();
+        Mix_Quit();
+        mixer_initialized = 0;
+    }
 }
 
 static void video_teardown(void) {
@@ -432,54 +444,85 @@ static int l_audio_close(lua_State *L) {
 }
 
 static int l_music_open(lua_State *L) {
-  const char *path = luaL_checkstring(L, 1);
-  char cmd[4096];
-  mci_cmd("close doommus", NULL, 0);
-  snprintf(cmd, sizeof(cmd), "open \"%s\" type sequencer alias doommus", path);
-  if (mci_cmd(cmd, NULL, 0) != 0) {
-    snprintf(cmd, sizeof(cmd), "open \"%s\" alias doommus", path);
-    if (mci_cmd(cmd, NULL, 0) != 0) {
-      lua_pushboolean(L, 0);
-      return 1;
+    const char *path = luaL_checkstring(L, 1);
+
+    if (!mixer_initialized) {
+        int flags = Mix_Init(MIX_INIT_MID);
+
+        if (!(flags & MIX_INIT_MID)) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) != 0) {
+            Mix_Quit();
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+
+        mixer_initialized = 1;
     }
-  }
-  lua_pushboolean(L, mci_cmd("play doommus from 0", NULL, 0) == 0);
-  return 1;
+
+    if (music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(music);
+        music = NULL;
+    }
+
+    music = Mix_LoadMUS(path);
+
+    if (!music) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    lua_pushboolean(L, Mix_PlayMusic(music, 0) == 0);
+    return 1;
 }
 
 static int l_music_status(lua_State *L) {
-  wchar_t buf[64];
-  char narrow[64];
-  buf[0] = 0;
-  if (mci_cmd("status doommus mode", buf, 64) != 0) {
-    lua_pushliteral(L, "");
+    if (!music || !Mix_PlayingMusic()) {
+        lua_pushliteral(L, "stopped");
+    } else if (Mix_PausedMusic()) {
+        lua_pushliteral(L, "paused");
+    } else {
+        lua_pushliteral(L, "playing");
+    }
+
     return 1;
-  }
-  if (WideCharToMultiByte(CP_UTF8, 0, buf, -1, narrow, 64, NULL, NULL) <= 0) {
-    lua_pushliteral(L, "");
-    return 1;
-  }
-  lua_pushstring(L, narrow);
-  return 1;
 }
 
 static int l_music_play(lua_State *L) {
-  lua_pushboolean(L, mci_cmd("play doommus from 0", NULL, 0) == 0);
-  return 1;
+    if (!music) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+
+    lua_pushboolean(L, Mix_PlayMusic(music, 0) == 0);
+    return 1;
 }
 
 static int l_music_volume(lua_State *L) {
-  char cmd[64];
-  int vol = (int)luaL_checkinteger(L, 1);
-  snprintf(cmd, sizeof(cmd), "setaudio doommus volume to %d", vol);
-  mci_cmd(cmd, NULL, 0);
-  return 0;
+    int vol = (int)luaL_checkinteger(L, 1);
+
+    if (vol < 0) vol = 0;
+    if (vol > 1000) vol = 1000;
+
+    Mix_VolumeMusic((vol * MIX_MAX_VOLUME) / 1000);
+
+    return 0;
 }
 
 static int l_music_close(lua_State *L) {
-  (void)L;
-  mci_cmd("close doommus", NULL, 0);
-  return 0;
+    (void)L;
+
+    if (music) {
+        Mix_HaltMusic();
+        Mix_FreeMusic(music);
+        music = NULL;
+    }
+
+    return 0;
 }
 
 static const luaL_Reg regs[] = {
@@ -505,7 +548,7 @@ static const luaL_Reg regs[] = {
   {NULL, NULL},
 };
 
-__declspec(dllexport) int luaopen_video_c(lua_State *L) {
+EXPORT int luaopen_video_c(lua_State *L) {
   luaL_newlib(L, regs);
   return 1;
 }

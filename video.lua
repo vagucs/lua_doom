@@ -13,9 +13,6 @@
 local keys = require("keys")
 
 local function backend()
-  if rawget(_G, "jit") then
-    return require("video_ffi")
-  end
   return require("video_c")
 end
 
@@ -23,6 +20,7 @@ local raw = backend()
 local M = {}
 
 function M.init(w, h, scale, title)
+  print("SCALE", scale)
   raw.init(w, h, scale, title)
 end
 

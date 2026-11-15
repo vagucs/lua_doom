@@ -68,6 +68,9 @@ local function take_args(argv)
     elseif a == "-skill" and argv[i + 1] then
       out.skill = tonumber(argv[i + 1]) or 2
       i = i + 2
+    elseif a == "-scale" then
+      out.scale = tonumber(argv[i + 1]) or 2
+      i = i + 1
     elseif a == "-file" then
       i = i + 1
       while argv[i] and argv[i]:sub(1, 1) ~= "-" do
@@ -138,6 +141,7 @@ local game = {
   sound = sound,
   skill = opts.skill,
   episode = opts.episode,
+  scale = opts.scale,
   mapn = opts.mapn,
   warp = opts.warp,
   show_fps = opts.show_fps,
@@ -190,6 +194,7 @@ local function apply_carry(player, prev)
   player.cards = { [0] = false, false, false, false, false, false }
   player.damagecount = 0
   player.bonuscount = 0
+  player.backpack = 0
   player.extralight = 0
   player.playerstate = 0
 end
@@ -203,8 +208,8 @@ local function lump_patch(name)
 end
 
 function game.touch_special(special, toucher)
-  if player_mod.take_key(special, toucher) and game.world then
-    collision.unset_thing_position(game.world, special)
+  if player_mod.take_key(special, toucher, game) and game.world then
+    thinker.remove_mobj(game.world, special)
   end
 end
 
@@ -434,7 +439,8 @@ local runtime = jitlib and ("luajit " .. tostring(jitlib.version)) or _VERSION
 print("lua_doom: " .. runtime .. "  Tab abre o mapa, o texto final conta a historia")
 print("texturas " .. #res.textures .. "  flats " .. #res.flattranslation)
 
-video.init(v.SCREENWIDTH, v.SCREENHEIGHT, 2, "DOOM (" .. runtime .. ")")
+print(game.scale)
+video.init(v.SCREENWIDTH, v.SCREENHEIGHT, game.scale, "DOOM (" .. runtime .. ")")
 video.set_palette(pal)
 video.set_crt(game.crt)
 sound_mod.init(sound, w)
