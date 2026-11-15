@@ -106,6 +106,9 @@ function M.new()
   self.change_music = function(name, looping)
     M.change_music(self, name, looping)
   end
+  self.set_music_volume = function(vol)
+    M.set_music_volume(self,vol)
+  end
   return self
 end
 
@@ -173,6 +176,7 @@ function M.set_sfx_volume(self, vol)
     vol = 15
   end
   self.sfx_volume = vol
+   print("set sfx", math.floor(vol / 15 * 1000))
 end
 
 function M.set_music_volume(self, vol)
@@ -185,6 +189,7 @@ function M.set_music_volume(self, vol)
   if self.music_on then
     video.music_volume(math.floor(vol / 15 * 1000))
   end
+  print("set volume", math.floor(vol / 15 * 1000))
 end
 
 function M.stop_music(self)
