@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -8,56 +8,112 @@
 --
 -- www.vagucs.com.br
 --
--- SDL2 pela FFI. So o LuaJIT carrega este arquivo.
+-- SDL3 pela FFI. So o LuaJIT carrega este arquivo.
 
 local ffi = require("ffi")
-local SDL = ffi.load("SDL2")
+
+local function load_sdl()
+  local src = debug.getinfo(1, "S").source
+  local dir = src:match("^@(.+)[\\/][^\\/]+$")
+  if dir then
+    local full = dir .. "\\sdl3\\SDL3-3.4.18-win32-x64\\SDL3.dll"
+    local f = io.open(full, "rb")
+    if f then
+      f:close()
+      return ffi.load(full)
+    end
+  end
+  return ffi.load("SDL3")
+end
+
+local SDL = load_sdl()
 
 ffi.cdef[[
 typedef struct SDL_Window SDL_Window;
 typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Texture SDL_Texture;
-typedef struct SDL_PixelFormat SDL_PixelFormat;
-int SDL_Init(unsigned int flags);
+typedef struct SDL_AudioStream SDL_AudioStream;
+typedef uint32_t SDL_AudioDeviceID;
+typedef uint16_t SDL_AudioFormat;
+typedef struct SDL_AudioSpec {
+  SDL_AudioFormat format;
+  int channels;
+  int freq;
+} SDL_AudioSpec;
+typedef struct SDL_KeyboardEvent {
+  uint32_t type;
+  uint32_t reserved;
+  uint64_t timestamp;
+  uint32_t windowID;
+  uint32_t which;
+  uint32_t scancode;
+  uint32_t key;
+  uint16_t mod;
+  uint16_t raw;
+  uint8_t down;
+  uint8_t repeat;
+} SDL_KeyboardEvent;
+typedef struct SDL_MouseMotionEvent {
+  uint32_t type;
+  uint32_t reserved;
+  uint64_t timestamp;
+  uint32_t windowID;
+  uint32_t which;
+  uint32_t state;
+  float x;
+  float y;
+  float xrel;
+  float yrel;
+} SDL_MouseMotionEvent;
+typedef struct SDL_MouseButtonEvent {
+  uint32_t type;
+  uint32_t reserved;
+  uint64_t timestamp;
+  uint32_t windowID;
+  uint32_t which;
+  uint8_t button;
+  uint8_t down;
+  uint8_t clicks;
+  uint8_t padding;
+  float x;
+  float y;
+} SDL_MouseButtonEvent;
+typedef union SDL_Event {
+  uint32_t type;
+  SDL_KeyboardEvent key;
+  SDL_MouseMotionEvent motion;
+  SDL_MouseButtonEvent button;
+  uint8_t pad[128];
+} SDL_Event;
+bool SDL_Init(uint32_t flags);
+bool SDL_InitSubSystem(uint32_t flags);
 void SDL_Quit(void);
 const char *SDL_GetError(void);
-int SDL_SetHint(const char *name, const char *value);
-void *SDL_CreateWindow(const char *title, int x, int y, int w, int h, unsigned int flags);
-void *SDL_CreateRenderer(void *window, int index, unsigned int flags);
-void *SDL_CreateTexture(void *renderer, unsigned int format, int access, int w, int h);
-void *SDL_AllocFormat(unsigned int format);
-unsigned int SDL_MapRGBA(void *format, unsigned char r, unsigned char g, unsigned char b, unsigned char a);
-int SDL_UpdateTexture(void *texture, const void *rect, const void *pixels, int pitch);
-int SDL_RenderClear(void *renderer);
-int SDL_RenderCopy(void *renderer, void *texture, const void *srcrect, const void *dstrect);
-void SDL_RenderPresent(void *renderer);
+void *SDL_CreateWindow(const char *title, int w, int h, uint64_t flags);
+bool SDL_SetWindowPosition(void *window, int x, int y);
+bool SDL_GetWindowSizeInPixels(void *window, int *w, int *h);
+bool SDL_SetWindowFullscreen(void *window, bool fullscreen);
+bool SDL_RestoreWindow(void *window);
+bool SDL_SetWindowRelativeMouseMode(void *window, bool enabled);
+void *SDL_CreateRenderer(void *window, const char *name);
+void *SDL_CreateTexture(void *renderer, uint32_t format, int access, int w, int h);
+bool SDL_SetTextureScaleMode(void *texture, int mode);
+bool SDL_UpdateTexture(void *texture, const void *rect, const void *pixels, int pitch);
+bool SDL_RenderClear(void *renderer);
+bool SDL_RenderTexture(void *renderer, void *texture, const void *srcrect, const void *dstrect);
+bool SDL_RenderPresent(void *renderer);
 void SDL_DestroyTexture(void *texture);
 void SDL_DestroyRenderer(void *renderer);
 void SDL_DestroyWindow(void *window);
-void SDL_FreeFormat(void *format);
-int SDL_PollEvent(unsigned char *event);
-int SDL_SetRelativeMouseMode(int enabled);
-int SDL_SetWindowFullscreen(void *window, unsigned int flags);
-void SDL_Delay(unsigned int ms);
-unsigned int SDL_GetTicks(void);
-int SDL_InitSubSystem(unsigned int flags);
-typedef struct SDL_AudioSpec {
-  int freq;
-  uint16_t format;
-  uint8_t channels;
-  uint8_t silence;
-  uint16_t samples;
-  uint16_t padding;
-  uint32_t size;
-  void *callback;
-  void *userdata;
-} SDL_AudioSpec;
-unsigned int SDL_OpenAudioDevice(const char *device, int iscapture, const SDL_AudioSpec *desired, SDL_AudioSpec *obtained, int allowed_changes);
-void SDL_PauseAudioDevice(unsigned int dev, int pause_on);
-void SDL_CloseAudioDevice(unsigned int dev);
-int SDL_QueueAudio(unsigned int dev, const void *data, unsigned int len);
-unsigned int SDL_GetQueuedAudioSize(unsigned int dev);
-void SDL_ClearQueuedAudio(unsigned int dev);
+bool SDL_PollEvent(SDL_Event *event);
+void SDL_Delay(uint32_t ms);
+uint64_t SDL_GetTicks(void);
+void *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID devid, const SDL_AudioSpec *spec, void *callback, void *userdata);
+bool SDL_ResumeAudioStreamDevice(void *stream);
+bool SDL_PutAudioStreamData(void *stream, const void *buf, int len);
+int SDL_GetAudioStreamQueued(void *stream);
+bool SDL_ClearAudioStream(void *stream);
+void SDL_DestroyAudioStream(void *stream);
 unsigned int mciSendStringW(const uint16_t *cmd, uint16_t *ret, unsigned int retlen, void *wnd);
 int MultiByteToWideChar(unsigned int cp, unsigned long flags, const char *src, int srclen, uint16_t *dst, int dstlen);
 int WideCharToMultiByte(unsigned int cp, unsigned long flags, const uint16_t *src, int srclen, char *dst, int dstlen, const char *defchar, int *used);
@@ -66,38 +122,41 @@ int WideCharToMultiByte(unsigned int cp, unsigned long flags, const uint16_t *sr
 local WINMM = ffi.load("winmm")
 local K32 = ffi.load("kernel32")
 
-local INIT = 32
-local CENTERED = 805240832
-local SHOWN = 4
-local ACCEL = 2
-local SOFTWARE = 1
-local ARGB8888 = 372645892
+local INIT = 0x20
+local AUDIO = 0x10
+local RESIZABLE = 0x20
+local CENTERED = 0x2FFF0000
+local ARGB8888 = 0x16362004
 local STREAMING = 1
-local KEYDOWN = 768
-local KEYUP = 769
-local QUIT = 256
-local MOUSEMOTION = 1024
-local MOUSEDOWN = 1025
-local MOUSEUP = 1026
-
-local AUDIO = 16
+local NEAREST = 0
+local KEYDOWN = 0x300
+local KEYUP = 0x301
+local QUIT = 0x100
+local CLOSE = 0x210
+local MAXIMIZED = 0x20A
+local RESTORED = 0x20B
+local RESIZED = 0x206
+local PIXEL = 0x207
+local MOUSEMOTION = 0x400
+local MOUSEDOWN = 0x401
+local MOUSEUP = 0x402
+local KMOD_ALT = 0x0300
 local S16 = 0x8010
-local ALLOW_RATE = 1
-local ALLOW_CH = 4
+local DEFAULT_PLAYBACK = 0xFFFFFFFF
 
-local window, renderer, texture, pixfmt
+local window, renderer, texture
 local pixels, palette
 local pal_r, pal_g, pal_b
 local tex_w, tex_h = 0, 0
 local win_w, win_h = 0, 0
 local crt_on = false
 local fullscreen_on = false
-local FULLSCREEN = 4097
+local suppress_maximize = false
 local crt_map, crt_gain, crt_src, crt_blur, crt_pix, crt_tex
 local crt_mask
 local crt_dw, crt_dh = 0, 0
 local up = false
-local audio_dev = 0
+local audio_stream = nil
 
 local function fail(what)
   error(what .. ": " .. ffi.string(SDL.SDL_GetError()))
@@ -118,11 +177,44 @@ local function music_close()
   mci("close doommus", nil)
 end
 
+local function pack_argb(r, g, b)
+  return 0xFF000000 + r * 65536 + g * 256 + b
+end
+
+local function sync_window_size()
+  if window == nil then
+    return
+  end
+  local w = ffi.new("int[1]")
+  local h = ffi.new("int[1]")
+  if SDL.SDL_GetWindowSizeInPixels(window, w, h) and w[0] > 1 and h[0] > 1 then
+    win_w, win_h = w[0], h[0]
+  end
+end
+
+local function set_fullscreen(on)
+  if window == nil then
+    return
+  end
+  if on then
+    if SDL.SDL_SetWindowFullscreen(window, true) then
+      fullscreen_on = true
+    end
+  else
+    suppress_maximize = true
+    SDL.SDL_SetWindowFullscreen(window, false)
+    SDL.SDL_RestoreWindow(window)
+    fullscreen_on = false
+  end
+  sync_window_size()
+end
+
 local function shutdown()
   fullscreen_on = false
-  if audio_dev ~= 0 then
-    SDL.SDL_CloseAudioDevice(audio_dev)
-    audio_dev = 0
+  suppress_maximize = false
+  if audio_stream ~= nil then
+    SDL.SDL_DestroyAudioStream(audio_stream)
+    audio_stream = nil
   end
   music_close()
   if crt_tex ~= nil then SDL.SDL_DestroyTexture(crt_tex) end
@@ -131,8 +223,7 @@ local function shutdown()
   if texture ~= nil then SDL.SDL_DestroyTexture(texture) end
   if renderer ~= nil then SDL.SDL_DestroyRenderer(renderer) end
   if window ~= nil then SDL.SDL_DestroyWindow(window) end
-  if pixfmt ~= nil then SDL.SDL_FreeFormat(pixfmt) end
-  texture, renderer, window, pixfmt = nil, nil, nil, nil
+  texture, renderer, window = nil, nil, nil
   pixels, palette = nil, nil
   tex_w, tex_h = 0, 0
   if up then
@@ -147,18 +238,16 @@ local function init(w, h, scale, title)
   if w < 1 or h < 1 then error("tamanho de textura invalido") end
   if scale < 1 then scale = 1 end
   shutdown()
-  SDL.SDL_SetHint("SDL_RENDER_SCALE_QUALITY", "0")
-  if SDL.SDL_Init(INIT) ~= 0 then fail("SDL_Init") end
+  if not SDL.SDL_Init(INIT) then fail("SDL_Init") end
   up = true
-  window = SDL.SDL_CreateWindow(title, CENTERED, CENTERED, w * scale, h * scale, SHOWN)
+  window = SDL.SDL_CreateWindow(title, w * scale, h * scale, RESIZABLE)
   if window == nil then fail("SDL_CreateWindow") end
-  renderer = SDL.SDL_CreateRenderer(window, -1, ACCEL)
-  if renderer == nil then renderer = SDL.SDL_CreateRenderer(window, -1, SOFTWARE) end
+  SDL.SDL_SetWindowPosition(window, CENTERED, CENTERED)
+  renderer = SDL.SDL_CreateRenderer(window, nil)
   if renderer == nil then fail("SDL_CreateRenderer") end
   texture = SDL.SDL_CreateTexture(renderer, ARGB8888, STREAMING, w, h)
   if texture == nil then fail("SDL_CreateTexture") end
-  pixfmt = SDL.SDL_AllocFormat(ARGB8888)
-  if pixfmt == nil then fail("SDL_AllocFormat") end
+  SDL.SDL_SetTextureScaleMode(texture, NEAREST)
   pixels = ffi.new("uint32_t[?]", w * h)
   palette = ffi.new("uint32_t[256]")
   pal_r = ffi.new("uint8_t[256]")
@@ -168,18 +257,18 @@ local function init(w, h, scale, title)
   win_w, win_h = w * scale, h * scale
   for i = 0, 255 do
     pal_r[i], pal_g[i], pal_b[i] = i, i, i
-    palette[i] = SDL.SDL_MapRGBA(pixfmt, i, i, i, 255)
+    palette[i] = pack_argb(i, i, i)
   end
 end
 
 local function set_palette(rgb)
-  if pixfmt == nil then error("SDL ainda nao foi iniciado") end
+  if pixels == nil then error("SDL ainda nao foi iniciado") end
   if #rgb < 768 then error("paleta precisa de 768 bytes RGB") end
   for i = 0, 255 do
     local at = i * 3
     local r, g, b = rgb:byte(at + 1), rgb:byte(at + 2), rgb:byte(at + 3)
     pal_r[i], pal_g[i], pal_b[i] = r, g, b
-    palette[i] = SDL.SDL_MapRGBA(pixfmt, r, g, b, 255)
+    palette[i] = pack_argb(r, g, b)
   end
 end
 
@@ -194,6 +283,9 @@ local function crt_build(dw, dh)
   crt_gain = ffi.new("uint8_t[?]", dw * dh)
   crt_pix = ffi.new("uint32_t[?]", dw * dh)
   crt_tex = SDL.SDL_CreateTexture(renderer, ARGB8888, STREAMING, dw, dh)
+  if crt_tex ~= nil then
+    SDL.SDL_SetTextureScaleMode(crt_tex, NEAREST)
+  end
   crt_dw, crt_dh = dw, dh
   if crt_src == nil then
     crt_src = ffi.new("uint8_t[?]", 320 * 200 * 3)
@@ -283,7 +375,7 @@ local function crt_build(dw, dh)
 end
 
 local function crt_show(fb)
-  if renderer == nil or pixfmt == nil or win_w < 2 or win_h < 2 then
+  if renderer == nil or win_w < 2 or win_h < 2 then
     return false
   end
   crt_build(win_w, win_h)
@@ -317,7 +409,7 @@ local function crt_show(fb)
       local i = y * win_w + x
       local idx = crt_map[i]
       if idx == 65535 then
-        crt_pix[i] = SDL.SDL_MapRGBA(pixfmt, 0, 0, 0, 255)
+        crt_pix[i] = pack_argb(0, 0, 0)
       else
         local gain = crt_gain[i]
         local mask = crt_mask[x % 3]
@@ -334,13 +426,13 @@ local function crt_show(fb)
         if b > 255 then
           b = 255
         end
-        crt_pix[i] = SDL.SDL_MapRGBA(pixfmt, r, g, b, 255)
+        crt_pix[i] = pack_argb(r, g, b)
       end
     end
   end
   SDL.SDL_UpdateTexture(crt_tex, nil, crt_pix, win_w * 4)
   SDL.SDL_RenderClear(renderer)
-  SDL.SDL_RenderCopy(renderer, crt_tex, nil, nil)
+  SDL.SDL_RenderTexture(renderer, crt_tex, nil, nil)
   SDL.SDL_RenderPresent(renderer)
   return true
 end
@@ -357,7 +449,7 @@ local function present(fb)
   end
   SDL.SDL_UpdateTexture(texture, nil, pixels, tex_w * 4)
   SDL.SDL_RenderClear(renderer)
-  SDL.SDL_RenderCopy(renderer, texture, nil, nil)
+  SDL.SDL_RenderTexture(renderer, texture, nil, nil)
   SDL.SDL_RenderPresent(renderer)
 end
 
@@ -366,49 +458,66 @@ local function set_crt(on)
 end
 
 local function mouse_relative(on)
-  SDL.SDL_SetRelativeMouseMode(on and 1 or 0)
+  if window ~= nil then
+    SDL.SDL_SetWindowRelativeMouseMode(window, on and true or false)
+  end
 end
 
 local function toggle_fullscreen()
-  if window == nil then
-    return false
-  end
-  local next_on = not fullscreen_on
-  if SDL.SDL_SetWindowFullscreen(window, next_on and FULLSCREEN or 0) == 0 then
-    fullscreen_on = next_on
-  end
+  set_fullscreen(not fullscreen_on)
   return fullscreen_on
 end
 
-local function u32_at(ev, offset)
-  return ev[offset] + ev[offset + 1] * 256 + ev[offset + 2] * 65536 + ev[offset + 3] * 16777216
-end
-
-local function i32_at(ev, offset)
-  local n = u32_at(ev, offset)
-  if n >= 2147483648 then
-    n = n - 4294967296
+local function key_sym(code)
+  if code >= 2147483648 then
+    return code - 4294967296
   end
-  return n
+  return code
 end
 
 local function poll()
-  local ev = ffi.new("unsigned char[56]")
+  local ev = ffi.new("SDL_Event")
   local out = {}
-  while SDL.SDL_PollEvent(ev) ~= 0 and #out < 64 do
-    local kind = u32_at(ev, 0)
-    if kind == QUIT then
+  while SDL.SDL_PollEvent(ev) and #out < 64 do
+    local kind = ev.type
+    if kind == QUIT or kind == CLOSE then
       out[#out + 1] = { down = true, sym = 0 }
+    elseif kind == MAXIMIZED then
+      if suppress_maximize then
+        suppress_maximize = false
+      elseif not fullscreen_on then
+        set_fullscreen(true)
+      end
+    elseif kind == RESTORED then
+      suppress_maximize = false
+      if not fullscreen_on then
+        sync_window_size()
+      end
+    elseif kind == RESIZED or kind == PIXEL then
+      sync_window_size()
     elseif kind == KEYDOWN or kind == KEYUP then
-      if not (kind == KEYDOWN and ev[13] ~= 0) then
-        local mod = ev[24] + ev[25] * 256
-        local alt = math.floor(mod / 256) % 4 ~= 0
-        out[#out + 1] = { down = kind == KEYDOWN, sym = i32_at(ev, 20), alt = alt }
+      if not (kind == KEYDOWN and ev.key["repeat"] ~= 0) then
+        out[#out + 1] = {
+          down = kind == KEYDOWN,
+          sym = key_sym(ev.key.key),
+          alt = bit.band(ev.key.mod, KMOD_ALT) ~= 0,
+        }
       end
     elseif kind == MOUSEMOTION then
-      out[#out + 1] = { mouse = true, down = false, sym = -1, dx = i32_at(ev, 28), dy = i32_at(ev, 32) }
-    elseif (kind == MOUSEDOWN or kind == MOUSEUP) and ev[16] == 1 then
-      out[#out + 1] = { mouse = true, down = kind == MOUSEDOWN, sym = -1, button = 1 }
+      out[#out + 1] = {
+        mouse = true,
+        down = false,
+        sym = -1,
+        dx = math.floor(ev.motion.xrel),
+        dy = math.floor(ev.motion.yrel),
+      }
+    elseif (kind == MOUSEDOWN or kind == MOUSEUP) and ev.button.button == 1 then
+      out[#out + 1] = {
+        mouse = true,
+        down = kind == MOUSEDOWN,
+        sym = -1,
+        button = 1,
+      }
     end
   end
   return out
@@ -421,56 +530,52 @@ local function delay(ms)
 end
 
 local function ticks()
-  return SDL.SDL_GetTicks()
+  return tonumber(SDL.SDL_GetTicks())
 end
 
 local function audio_open()
-  if audio_dev ~= 0 then
-    SDL.SDL_CloseAudioDevice(audio_dev)
-    audio_dev = 0
+  if audio_stream ~= nil then
+    SDL.SDL_DestroyAudioStream(audio_stream)
+    audio_stream = nil
   end
-  if SDL.SDL_InitSubSystem(AUDIO) ~= 0 then
+  if not SDL.SDL_InitSubSystem(AUDIO) then
     return nil
   end
-  local want = ffi.new("SDL_AudioSpec")
-  local have = ffi.new("SDL_AudioSpec")
-  want.freq = 11025
-  want.format = S16
-  want.channels = 1
-  want.samples = 512
-  want.callback = nil
-  audio_dev = SDL.SDL_OpenAudioDevice(nil, 0, want, have, ALLOW_RATE + ALLOW_CH)
-  if audio_dev == 0 or have.format ~= S16 then
-    if audio_dev ~= 0 then
-      SDL.SDL_CloseAudioDevice(audio_dev)
-      audio_dev = 0
+  local spec = ffi.new("SDL_AudioSpec")
+  spec.format = S16
+  spec.channels = 1
+  spec.freq = 11025
+  audio_stream = SDL.SDL_OpenAudioDeviceStream(DEFAULT_PLAYBACK, spec, nil, nil)
+  if audio_stream == nil or not SDL.SDL_ResumeAudioStreamDevice(audio_stream) then
+    if audio_stream ~= nil then
+      SDL.SDL_DestroyAudioStream(audio_stream)
+      audio_stream = nil
     end
     return nil
   end
-  SDL.SDL_PauseAudioDevice(audio_dev, 0)
-  return have.freq, have.channels
+  return spec.freq, spec.channels
 end
 
 local function audio_queue(pcm)
-  if audio_dev == 0 or pcm == nil or #pcm == 0 then
+  if audio_stream == nil or pcm == nil or #pcm == 0 then
     return
   end
-  if SDL.SDL_GetQueuedAudioSize(audio_dev) > 11025 * 4 then
+  if SDL.SDL_GetAudioStreamQueued(audio_stream) > 11025 * 4 then
     return
   end
-  SDL.SDL_QueueAudio(audio_dev, ffi.cast("const void*", pcm), #pcm)
+  SDL.SDL_PutAudioStreamData(audio_stream, ffi.cast("const void*", pcm), #pcm)
 end
 
 local function audio_clear()
-  if audio_dev ~= 0 then
-    SDL.SDL_ClearQueuedAudio(audio_dev)
+  if audio_stream ~= nil then
+    SDL.SDL_ClearAudioStream(audio_stream)
   end
 end
 
 local function audio_close()
-  if audio_dev ~= 0 then
-    SDL.SDL_CloseAudioDevice(audio_dev)
-    audio_dev = 0
+  if audio_stream ~= nil then
+    SDL.SDL_DestroyAudioStream(audio_stream)
+    audio_stream = nil
   end
 end
 

@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -37,7 +37,7 @@ eq("fmbig", C.fixed_mul(2147483647, 2147483647), -65536)
 eq("fd2", C.fixed_div(F, 2), 2147483647)
 eq("fdhalf", C.fixed_div(F, 2 * F), 32768)
 eq("fdnhalf", C.fixed_div(-F, 2 * F), -32768)
-eq("fdn3", C.fixed_div(-1, 3), -21846)
+eq("fdn3", C.fixed_div(-1, 3), -21845)
 eq("fd0", C.fixed_div(1, 0), 2147483647)
 eq("fdn0", C.fixed_div(-1, 0), -2147483648)
 eq("fdsat", C.fixed_div(1073741824, F), 2147483647)

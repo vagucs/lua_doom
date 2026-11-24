@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -120,20 +120,21 @@ local function floor_div(n, d)
   return q
 end
 
+local function mul_parts(n)
+  local u = M.as_u32(n)
+  local lo = u % 65536
+  local hi = (u - lo) / 65536
+  if hi >= 32768 then
+    hi = hi - 65536
+  end
+  return hi, lo
+end
+
 function M.fixed_mul(a, b)
   a = M.as_i32(a)
   b = M.as_i32(b)
-  local function parts(n)
-    local u = M.as_u32(n)
-    local lo = u % 65536
-    local hi = (u - lo) / 65536
-    if hi >= 32768 then
-      hi = hi - 65536
-    end
-    return hi, lo
-  end
-  local ah, al = parts(a)
-  local bh, bl = parts(b)
+  local ah, al = mul_parts(a)
+  local bh, bl = mul_parts(b)
   local low = math.floor((al * bl) / 65536)
   return M.as_i32(ah * bh * 65536 + ah * bl + al * bh + low)
 end
@@ -155,7 +156,11 @@ function M.fixed_div(a, b)
     end
     return MININT
   end
-  return M.as_i32(floor_div(a * 65536, b))
+  local q = floor_div(abs_a * 65536, abs_b)
+  if (a < 0) ~= (b < 0) then
+    q = -q
+  end
+  return M.as_i32(q)
 end
 
 function M.abs_fixed(n)

@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -78,12 +78,6 @@ local function span_tables()
     bottom[i] = 0
   end
   return top, bottom
-end
-
-local function put(fb, dest, val)
-  if dest >= 0 and dest < PIXELS then
-    fb[dest + 1] = val
-  end
 end
 
 local function draw_column(self)
@@ -287,6 +281,143 @@ function M.draw_masked(self)
   end
 end
 
+local function byte_list(self, s)
+  local cache = self.byte_cache
+  if not cache then
+    cache = {}
+    self.byte_cache = cache
+  end
+  local hit = cache[s]
+  if hit then
+    return hit
+  end
+  hit = { byte(s, 1, #s) }
+  cache[s] = hit
+  return hit
+end
+
+local function plane_top(pl, x)
+  if x < 0 or x >= SCREENWIDTH then
+    return 255
+  end
+  local t = pl.top[x]
+  if t == nil then
+    return 255
+  end
+  return t
+end
+
+local function plane_bottom(pl, x)
+  if x < 0 or x >= SCREENWIDTH then
+    return 0
+  end
+  local b = pl.bottom[x]
+  if b == nil then
+    return 0
+  end
+  return b
+end
+
+local function draw_span(self)
+  local y = self.ds_y
+  local x1 = self.ds_x1
+  local x2 = self.ds_x2
+  local xfrac = self.ds_xfrac
+  local yfrac = self.ds_yfrac
+  local xstep = self.ds_xstep
+  local ystep = self.ds_ystep
+  local flatb = self.ds_flatb
+  local cmb = self.ds_cmapb
+  local fb = self.fb
+  if self.detailshift ~= 0 then
+    x1 = shl(x1, 1)
+    x2 = shl(x2, 1)
+    local dest = self.ylookup[y] + self.columnofs[x1]
+    local count = ushr(x2 - x1, 1)
+    while count >= 0 and dest + 1 < PIXELS do
+      local spot = bor(band(shar(xfrac, 16), 63), band(shar(yfrac, 10), 4032))
+      local pix = flatb[spot + 1] or 0
+      local val = cmb[pix + 1] or pix
+      fb[dest + 1] = val
+      if dest + 1 < PIXELS then
+        fb[dest + 2] = val
+      end
+      dest = dest + 2
+      xfrac = as_i32(xfrac + xstep)
+      yfrac = as_i32(yfrac + ystep)
+      count = count - 1
+    end
+  else
+    local dest = self.ylookup[y] + self.columnofs[x1]
+    local count = x2 - x1
+    while count >= 0 and dest < PIXELS do
+      local spot = bor(band(shar(xfrac, 16), 63), band(shar(yfrac, 10), 4032))
+      local pix = flatb[spot + 1] or 0
+      local val = cmb[pix + 1] or pix
+      fb[dest + 1] = val
+      dest = dest + 1
+      xfrac = as_i32(xfrac + xstep)
+      yfrac = as_i32(yfrac + ystep)
+      count = count - 1
+    end
+  end
+end
+
+local function map_plane(self, y, x1, x2)
+  if y < 0 or y >= self.viewheight or x1 > x2 then
+    return
+  end
+  local distance
+  if self.planeheight ~= self.cachedheight[y] then
+    self.cachedheight[y] = self.planeheight
+    distance = fixed_mul(self.planeheight, self.yslope[y])
+    self.cacheddistance[y] = distance
+    self.cachedxstep[y] = fixed_mul(distance, self.basexscale)
+    self.cachedystep[y] = fixed_mul(distance, self.baseyscale)
+  else
+    distance = self.cacheddistance[y]
+  end
+  self.ds_xstep = self.cachedxstep[y]
+  self.ds_ystep = self.cachedystep[y]
+  local length = fixed_mul(distance, self.distscale[x1])
+  local ang = band(ushr(as_u32(self.viewangle + self.xtoviewangle[x1]), ANGLETOFINESHIFT), FINEMASK)
+  self.ds_xfrac = self.viewx + fixed_mul(tables.finesine[band(ang + idiv(FINEANGLES, 4), FINEMASK)], length)
+  self.ds_yfrac = -self.viewy - fixed_mul(tables.finesine[ang], length)
+  if self.fixedcolormap then
+    self.ds_colormap = self.fixedcolormap
+  else
+    local index = ushr(distance, LIGHTZSHIFT)
+    if index > MAXLIGHTZ - 1 then
+      index = MAXLIGHTZ - 1
+    end
+    self.ds_colormap = rdata.colormap(self.res, self.planezlight[index])
+  end
+  self.ds_cmapb = byte_list(self, self.ds_colormap)
+  self.ds_y = y
+  self.ds_x1 = x1
+  self.ds_x2 = x2
+  draw_span(self)
+end
+
+local function make_spans(self, x, t1, b1, t2, b2)
+  while t1 < t2 and t1 <= b1 do
+    map_plane(self, t1, self.spanstart[t1], x - 1)
+    t1 = t1 + 1
+  end
+  while b1 > b2 and b1 >= t1 do
+    map_plane(self, b1, self.spanstart[b1], x - 1)
+    b1 = b1 - 1
+  end
+  while t2 < t1 and t2 <= b2 do
+    self.spanstart[t2] = x
+    t2 = t2 + 1
+  end
+  while b2 > b1 and b2 >= t2 do
+    self.spanstart[b2] = x
+    b2 = b2 - 1
+  end
+end
+
 local function draw_planes(self)
   for p = 1, #self.visplanes do
     local pl = self.visplanes[p]
@@ -314,73 +445,14 @@ local function draw_planes(self)
         if light > LIGHTLEVELS - 1 then
           light = LIGHTLEVELS - 1
         end
-        local planezlight = self.zlight[light]
-        local flat = rdata.flat_pixels(self.res, pl.picnum)
-        local flatlen = #flat
-        local planeheight = abs_fixed(pl.height - self.viewz)
-        if planeheight ~= 0 then
-          local cached_y = -1
-          local light_index = -1
-          local cm, cmlen
-          local distance, ds_xstep, ds_ystep = 0, 0, 0
-          local x0 = pl.minx
-          if x0 < 0 then
-            x0 = 0
-          end
-          local x1 = pl.maxx
-          if x1 > self.viewwidth - 1 then
-            x1 = self.viewwidth - 1
-          end
-          for x = x0, x1 do
-            local t1, b1 = pl.top[x], pl.bottom[x]
-            if t1 <= b1 and t1 ~= 255 then
-              local y1 = b1
-              if y1 > self.viewheight - 1 then
-                y1 = self.viewheight - 1
-              end
-              for y = t1, y1 do
-                if y ~= cached_y then
-                  cached_y = y
-                  distance = fixed_mul(planeheight, self.yslope[y])
-                  ds_xstep = fixed_mul(distance, self.basexscale)
-                  ds_ystep = fixed_mul(distance, self.baseyscale)
-                end
-                local length = fixed_mul(distance, self.distscale[x])
-                local ang = band(ushr(as_u32(self.viewangle + self.xtoviewangle[x]), ANGLETOFINESHIFT), FINEMASK)
-                local ds_xfrac = self.viewx + fixed_mul(tables.finesine[band(ang + idiv(FINEANGLES, 4), FINEMASK)], length)
-                local ds_yfrac = -self.viewy - fixed_mul(tables.finesine[ang], length)
-                local index = ushr(distance, LIGHTZSHIFT)
-                if index > MAXLIGHTZ - 1 then
-                  index = MAXLIGHTZ - 1
-                end
-                if index ~= light_index then
-                  light_index = index
-                  if self.fixedcolormap then
-                    cm = self.fixedcolormap
-                  else
-                    cm = rdata.colormap(self.res, planezlight[index])
-                  end
-                  cmlen = #cm
-                end
-                local spot = bor(band(shar(ds_xfrac, 16), 63), band(shar(ds_yfrac, 10), 4032))
-                local pix = 0
-                if spot >= 0 and spot < flatlen then
-                  pix = byte(flat, spot + 1)
-                end
-                local val = pix
-                if pix < cmlen then
-                  val = byte(cm, pix + 1)
-                end
-                if self.detailshift ~= 0 then
-                  local xx = shl(x, 1)
-                  local off = self.ylookup[y] + self.columnofs[xx]
-                  put(self.fb, off, val)
-                  put(self.fb, off + 1, val)
-                else
-                  put(self.fb, self.ylookup[y] + self.columnofs[x], val)
-                end
-              end
-            end
+        self.planezlight = self.zlight[light]
+        self.ds_source = rdata.flat_pixels(self.res, pl.picnum)
+        self.ds_flatb = byte_list(self, self.ds_source)
+        self.planeheight = abs_fixed(pl.height - self.viewz)
+        if self.planeheight ~= 0 then
+          local stop = pl.maxx + 1
+          for x = pl.minx, stop do
+            make_spans(self, x, plane_top(pl, x - 1), plane_bottom(pl, x - 1), plane_top(pl, x), plane_bottom(pl, x))
           end
         end
       end
@@ -779,12 +851,8 @@ local function clip_solid(self, first, last)
     return
   end
   local start = 0
-  while start < self.newend and self.solidsegs[start].last < first - 1 do
+  while self.solidsegs[start].last < first - 1 do
     start = start + 1
-  end
-  if start >= self.newend then
-    store_wall_range(self, first, last)
-    return
   end
   if first < self.solidsegs[start].first then
     if last < self.solidsegs[start].first - 1 then
@@ -803,7 +871,7 @@ local function clip_solid(self, first, last)
     return
   end
   local nexti = start
-  while nexti + 1 < self.newend and last >= self.solidsegs[nexti + 1].first - 1 do
+  while last >= self.solidsegs[nexti + 1].first - 1 do
     store_wall_range(self, self.solidsegs[nexti].last + 1, self.solidsegs[nexti + 1].first - 1)
     nexti = nexti + 1
     if last <= self.solidsegs[nexti].last then
@@ -822,12 +890,8 @@ local function clip_pass(self, first, last)
     return
   end
   local start = 0
-  while start < self.newend and self.solidsegs[start].last < first - 1 do
+  while self.solidsegs[start].last < first - 1 do
     start = start + 1
-  end
-  if start >= self.newend then
-    store_wall_range(self, first, last)
-    return
   end
   if first < self.solidsegs[start].first then
     if last < self.solidsegs[start].first - 1 then
@@ -840,7 +904,7 @@ local function clip_pass(self, first, last)
     return
   end
   local nexti = start
-  while nexti + 1 < self.newend and last >= self.solidsegs[nexti + 1].first - 1 do
+  while last >= self.solidsegs[nexti + 1].first - 1 do
     store_wall_range(self, self.solidsegs[nexti].last + 1, self.solidsegs[nexti + 1].first - 1)
     nexti = nexti + 1
     if last <= self.solidsegs[nexti].last then
@@ -940,9 +1004,92 @@ local function add_line(self, line)
   clip_pass(self, x1, x2 - 1)
 end
 
+local WAD_TOP, WAD_BOTTOM, WAD_LEFT, WAD_RIGHT = 1, 2, 3, 4
+local CHECKCOORD = {
+  [0] = { WAD_RIGHT, WAD_TOP, WAD_LEFT, WAD_BOTTOM },
+  { WAD_RIGHT, WAD_TOP, WAD_LEFT, WAD_TOP },
+  { WAD_RIGHT, WAD_BOTTOM, WAD_LEFT, WAD_TOP },
+  { 0, 0, 0, 0 },
+  { WAD_LEFT, WAD_TOP, WAD_LEFT, WAD_BOTTOM },
+  { 0, 0, 0, 0 },
+  { WAD_RIGHT, WAD_BOTTOM, WAD_RIGHT, WAD_TOP },
+  { 0, 0, 0, 0 },
+  { WAD_LEFT, WAD_TOP, WAD_RIGHT, WAD_BOTTOM },
+  { WAD_LEFT, WAD_BOTTOM, WAD_RIGHT, WAD_BOTTOM },
+  { WAD_LEFT, WAD_BOTTOM, WAD_RIGHT, WAD_TOP },
+  { 0, 0, 0, 0 },
+}
+
+local function check_bbox(self, bspcoord)
+  local boxx, boxy
+  if self.viewx <= bspcoord[WAD_LEFT] then
+    boxx = 0
+  elseif self.viewx < bspcoord[WAD_RIGHT] then
+    boxx = 1
+  else
+    boxx = 2
+  end
+  if self.viewy >= bspcoord[WAD_TOP] then
+    boxy = 0
+  elseif self.viewy > bspcoord[WAD_BOTTOM] then
+    boxy = 1
+  else
+    boxy = 2
+  end
+  local boxpos = boxy * 4 + boxx
+  if boxpos == 5 then
+    return true
+  end
+  local c = CHECKCOORD[boxpos]
+  local x1 = bspcoord[c[1]]
+  local y1 = bspcoord[c[2]]
+  local x2 = bspcoord[c[3]]
+  local y2 = bspcoord[c[4]]
+  local angle1 = as_u32(M.point_to_angle(self, x1, y1) - self.viewangle)
+  local angle2 = as_u32(M.point_to_angle(self, x2, y2) - self.viewangle)
+  local span = as_u32(angle1 - angle2)
+  if span >= ANG180 then
+    return true
+  end
+  local tspan = as_u32(angle1 + self.clipangle)
+  if tspan > as_u32(2 * self.clipangle) then
+    tspan = as_u32(tspan - 2 * self.clipangle)
+    if tspan >= span then
+      return false
+    end
+    angle1 = self.clipangle
+  end
+  tspan = as_u32(self.clipangle - angle2)
+  if tspan > as_u32(2 * self.clipangle) then
+    tspan = as_u32(tspan - 2 * self.clipangle)
+    if tspan >= span then
+      return false
+    end
+    angle2 = as_u32(-self.clipangle)
+  end
+  local mask = idiv(FINEANGLES, 2) - 1
+  local sx1 = self.viewangletox[band(ushr(as_u32(angle1 + ANG90), ANGLETOFINESHIFT), mask)]
+  local sx2 = self.viewangletox[band(ushr(as_u32(angle2 + ANG90), ANGLETOFINESHIFT), mask)]
+  if sx1 == sx2 then
+    return false
+  end
+  sx2 = sx2 - 1
+  local start = 0
+  while self.solidsegs[start].last < sx2 do
+    start = start + 1
+  end
+  if sx1 >= self.solidsegs[start].first and sx2 <= self.solidsegs[start].last then
+    return false
+  end
+  return true
+end
+
 local function subsector(self, world, num)
   local sub = world.subsectors[num + 1]
   self.frontsector = sub.sector
+  if self.frontsector.validcount ~= world.validcount then
+    self.frontsector.validcount = world.validcount
+  end
   local light = ushr(self.frontsector.lightlevel, 4) + self.extralight
   if light < 0 then
     light = 0
@@ -951,8 +1098,16 @@ local function subsector(self, world, num)
     light = LIGHTLEVELS - 1
   end
   self.walllights = self.scalelight[light]
-  self.floorplane = M.find_plane(self, self.frontsector.floorheight, self.frontsector.floorpic, self.frontsector.lightlevel)
-  self.ceilingplane = M.find_plane(self, self.frontsector.ceilingheight, self.frontsector.ceilingpic, self.frontsector.lightlevel)
+  if self.frontsector.floorheight < self.viewz then
+    self.floorplane = M.find_plane(self, self.frontsector.floorheight, self.frontsector.floorpic, self.frontsector.lightlevel)
+  else
+    self.floorplane = nil
+  end
+  if self.frontsector.ceilingheight > self.viewz or self.frontsector.ceilingpic == self.res.skyflatnum then
+    self.ceilingplane = M.find_plane(self, self.frontsector.ceilingheight, self.frontsector.ceilingpic, self.frontsector.lightlevel)
+  else
+    self.ceilingplane = nil
+  end
   local line = sub.firstline
   for _ = 1, sub.numlines do
     add_line(self, world.segs[line + 1])
@@ -972,7 +1127,10 @@ local function render_bsp_node(self, world, bspnum)
   local node = world.nodes[bspnum + 1]
   local side = point_on_side(self, self.viewx, self.viewy, node)
   render_bsp_node(self, world, node.children[side + 1])
-  render_bsp_node(self, world, node.children[bxor(side, 1) + 1])
+  local far = bxor(side, 1)
+  if check_bbox(self, node.bbox[far + 1]) then
+    render_bsp_node(self, world, node.children[far + 1])
+  end
 end
 
 local function clear_clip(self)
@@ -1077,12 +1235,16 @@ function M.setup_frame(self, x, y, z, angle, extra_light, fixedcolormap)
   end
   self.basexscale = fixed_div(tables.finesine[band(ang + idiv(FINEANGLES, 4), FINEMASK)], denom)
   self.baseyscale = -fixed_div(tables.finesine[ang], denom)
+  for i = 0, SCREENHEIGHT - 1 do
+    self.cachedheight[i] = 0
+  end
 end
 
 function M.render(self, world, fb)
   self.fb = fb
   self.visplanes = {}
   self.drawsegs = {}
+  world.validcount = (world.validcount or 0) + 1
   clear_clip(self)
   if #world.nodes > 0 then
     render_bsp_node(self, world, world.numnodes - 1)
@@ -1265,6 +1427,11 @@ function M.new(res)
     solidsegs = {},
     visplanes = {},
     drawsegs = {},
+    spanstart = {},
+    cachedheight = {},
+    cacheddistance = {},
+    cachedxstep = {},
+    cachedystep = {},
     screenblocks = 10,
     extralight = 0,
     fixedcolormap = nil,
@@ -1280,6 +1447,11 @@ function M.new(res)
   end
   for i = 0, SCREENHEIGHT - 1 do
     self.ylookup[i] = i * SCREENWIDTH
+    self.spanstart[i] = 0
+    self.cachedheight[i] = 0
+    self.cacheddistance[i] = 0
+    self.cachedxstep[i] = 0
+    self.cachedystep[i] = 0
   end
   for i = 0, SCREENWIDTH - 1 do
     self.columnofs[i] = i

@@ -1,10 +1,10 @@
 # lua_doom
 
-![DOOM running on Lua with SDL2](screenshot/doom.png)
+![DOOM running on Lua with SDL3](screenshot/doom.png)
 
 **Video:** [DOOM running in Lua](https://youtu.be/4OYTretHKtY)
 
-DOOM generic ported from **[python_doom](https://github.com/vagucs/python_doom)** to **Lua 5.4 and LuaJIT + SDL2**.
+DOOM generic ported from **[python_doom](https://github.com/vagucs/python_doom)** to **Lua 5.4 and LuaJIT + SDL3**.
 
 By **Wagner Nunes da Silva**
 
@@ -14,7 +14,7 @@ By **Wagner Nunes da Silva**
 - [www.vagucs.com.br](https://www.vagucs.com.br)
 - [LinkedIn](https://www.linkedin.com/in/wagner-nunes-da-silva-b0a15360)
 
-This tree is that Python engine again, in Lua. The same source runs on PUC-Rio Lua 5.4 and on LuaJIT. The game loop, the map, and the renderer stay in Lua. SDL2 sits behind one API. LuaJIT calls `SDL2.dll` through the FFI. Lua 5.4 uses a small C bridge (`src/video_c.c`). Windows MCI plays the MIDI, because SDL2 does not.
+This tree is that Python engine again, in Lua. The same source runs on PUC-Rio Lua 5.4 and on LuaJIT. The game loop, the map, and the renderer stay in Lua. SDL3 sits behind one API. LuaJIT calls this folder's `SDL3.dll` through the FFI (`video_ffi.lua`). Lua 5.4 uses the same DLL through a small C bridge (`src/video_c.c`, `video_c.dll`). The headers and the DLL live in `sdl3\SDL3-3.4.18-win32-x64`. Windows MCI plays the MIDI, because SDL3 does not.
 
 Versão em português: [README.pt.md](README.pt.md)
 
@@ -24,7 +24,7 @@ Versão em português: [README.pt.md](README.pt.md)
 
 `python_doom` is a condensed, playable DOOM engine in Python. This directory is the **same study piece**, rewritten in Lua:
 
-- Window, keys, mouse, PCM: **SDL2**, one API for both runtimes
+- Window, keys, mouse, PCM: **SDL3**, one API for both runtimes
 - Framebuffer: 320×200, one PLAYPAL index per slot, stretched to a 640×400 window
 - Game tick: 35 Hz (`TICRATE`). Each displayed frame runs up to 4 tics
 - Renderer: BSP, visplanes, columns, spans, sprites, the weapon sprite
@@ -33,7 +33,7 @@ Versão em português: [README.pt.md](README.pt.md)
 
 You need a legal IWAD (shareware `doom1.wad` or commercial `doom.wad` / `doom2.wad`). This repository does not ship commercial WAD data.
 
-It is a **condensed educational port**: the engine is Lua, the native layer is SDL2.
+It is a **condensed educational port**: the engine is Lua, the native layer is SDL3.
 
 Left out of this tree:
 
@@ -50,11 +50,11 @@ What it is meant to teach:
 - **Python, then Lua.** Open `python_doom/doom/` next to `lua_doom/`. The names stay close (`thrust`, `fixed_mul`, `line_attack`) so the two files can sit side by side.
 - **One dialect, two runtimes.** The engine is the Lua 5.1 common subset. No `//`, no `&` `|` `<<` `>>` in files LuaJIT parses, and no `ffi` outside `video_ffi.lua`. `band` / `bor` / `bxor` / `shl` use `bit.*` on LuaJIT and the Lua 5.4 operators, loaded with `load`.
 - **1-based reads.** WAD lumps, BSP nodes, menu rows, and screen columns stay 0-based in the data and are read with `+ 1`.
-- **Where Lua is enough.** Columns, floors, sprites, and thinkers run in Lua. SDL2 is the window, the keyboard, the mouse, and the PCM queue.
+- **Where Lua is enough.** Columns, floors, sprites, and thinkers run in Lua. SDL3 is the window, the keyboard, the mouse, and the PCM queue.
 
 Suggested way to study:
 
-1. Run `run.bat`, then `run.bat jit`, and read `main.lua` — boot, tic, input.
+1. Run `run.bat` and read `main.lua` — boot, tic, input. `run.bat lua` is Lua 5.4.
 2. Compare `compat.lua` with `python_doom/doom/compat.py`.
 3. Open `render.lua` next to `python_doom/doom/render.py`.
 4. Follow a door from **Space** (`use_lines` in `collision.lua`) through `specials.lua`.
@@ -78,7 +78,7 @@ Python lists are 0-based. Lua tables used as arrays are 1-based. WAD lumps, BSP 
 | `a // b` | `math.floor` |
 | `fixed_mul` / `fixed_div` | `fixed_mul` / `fixed_div` |
 | `bytearray` framebuffer | table of bytes, length 64000 |
-| pygame | SDL2: FFI on LuaJIT, `video_c.dll` on Lua 5.4 |
+| pygame | SDL3: FFI on LuaJIT, `video_c.dll` on Lua 5.4 |
 | `+=` | `x = x + ...` |
 
 A table is a reference, so a field write is visible to the caller, the same way a Python object is.
@@ -111,7 +111,7 @@ end
 | Layer | This port | Python (`python_doom`) |
 | --- | --- | --- |
 | Language | Lua 5.4.9 and LuaJIT 2.1, one source | Python 3.10+ |
-| Window, keys, mouse, PCM | SDL2. FFI in `video_ffi.lua`, or `src/video_c.c` | pygame 2.x |
+| Window, keys, mouse, PCM | SDL3. FFI in `video_ffi.lua`, or `src/video_c.c` | pygame 2.x |
 | Palette blit / CRT | Lua, then the SDL texture | numpy |
 | MIDI (Windows) | winmm MCI | the same idea, outside pygame |
 | IWAD | the same lumps | the same lumps |
@@ -129,18 +129,18 @@ Tools, on MSYS2 UCRT64:
 | --- | --- |
 | Lua 5.4.9 (PUC-Rio) | `C:\msys64\ucrt64\bin\lua5.4.exe` |
 | LuaJIT 2.1 | `C:\msys64\ucrt64\bin\luajit.exe` |
-| SDL2 | `C:\msys64\ucrt64\bin\SDL2.dll` |
+| SDL3 | `sdl3\SDL3-3.4.18-win32-x64\SDL3.dll` (copy as `SDL3.dll`) |
 
 From this directory:
 
 ```
 run.bat
-run.bat jit
 run.bat -warp 1 1 -skill 2
-run.bat jit -fps -crt
+run.bat lua
+run.bat jit -crt
 ```
 
-`run.bat` opens the window with Lua 5.4. `run.bat jit` opens the same game with LuaJIT. The window is 640×400. Without `-crt`, the 320×200 texture is stretched with nearest-neighbor.
+`run.bat` opens the window with LuaJIT. `run.bat lua` uses Lua 5.4, which is much slower at drawing. The window is 640×400. Without `-crt`, the 320×200 texture is stretched with nearest-neighbor. The top-right corner shows the FPS of the last second and the average since the counter appeared. **F11** hides or shows it again.
 
 ---
 
@@ -221,8 +221,8 @@ A level change melts the screen. Starting a new game from the title does not. Sh
 
 ```
 main.lua             entry
-run.bat              Lua 5.4, or `jit` for LuaJIT
-video_ffi.lua        SDL2 through the LuaJIT FFI
+run.bat              LuaJIT; `lua` for Lua 5.4
+video_ffi.lua        SDL3 through the LuaJIT FFI
 src/video_c.c        the same API for Lua 5.4
 build_video.bat      rebuild that bridge
 screenshot/doom.png  the picture at the top
@@ -262,7 +262,7 @@ screenshot/doom.png  the picture at the top
 ## Lineage
 
 1. **[python_doom](https://github.com/vagucs/python_doom)** — Python + pygame
-2. **[lua_doom](https://github.com/vagucs/lua_doom)** — Lua 5.4 and LuaJIT + SDL2 (this tree)
+2. **[lua_doom](https://github.com/vagucs/lua_doom)** — Lua 5.4 and LuaJIT + SDL3 (this tree)
 
 ---
 

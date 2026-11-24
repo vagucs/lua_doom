@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -31,6 +31,10 @@ local FINEANGLES = 8192
 local ANG45 = 536870912
 local MF_SHADOW = 262144
 local MF_NOSECTOR = 8
+local FF_FULLBRIGHT = 32768
+local LIGHTLEVELS = 16
+local LIGHTSCALESHIFT = 12
+local MAXLIGHTSCALE = 48
 local MINZ = 4 * FRACUNIT
 local MAX_SPRITE_FRAMES = 29
 local SIL_TOP = 1
@@ -214,7 +218,48 @@ local function point_on_seg_side(x, y, line)
   return 1
 end
 
-local function project(renderer, mo)
+local function sector_of(world, mo)
+  local sub = mo.subsector
+  if not sub then
+    sub = require("world").point_in_subsector(world, mo.x, mo.y)
+  end
+  if not sub then
+    return nil
+  end
+  return sub.sector
+end
+
+local function sprite_colormap(renderer, spr)
+  if renderer.fixedcolormap then
+    return renderer.fixedcolormap
+  end
+  local mo = spr.mo
+  if mo and band(mo.frame or 0, FF_FULLBRIGHT) ~= 0 then
+    return rdata.colormap(renderer.res, 0)
+  end
+  local lightlevel = spr.lightlevel
+  if lightlevel == nil then
+    return rdata.colormap(renderer.res, 0)
+  end
+  local lightnum = ushr(lightlevel, 4) + (renderer.extralight or 0)
+  if lightnum < 0 then
+    lightnum = 0
+  end
+  if lightnum > LIGHTLEVELS - 1 then
+    lightnum = LIGHTLEVELS - 1
+  end
+  local index = ushr(spr.scale, LIGHTSCALESHIFT)
+  if index < 0 then
+    index = 0
+  end
+  if index > MAXLIGHTSCALE - 1 then
+    index = MAXLIGHTSCALE - 1
+  end
+  local level = renderer.scalelight[lightnum][index] or 0
+  return rdata.colormap(renderer.res, level)
+end
+
+local function project(renderer, world, mo)
   local tr_x = as_i32(mo.x - renderer.viewx)
   local tr_y = as_i32(mo.y - renderer.viewy)
   local gxt = fixed_mul(tr_x, renderer.viewcos)
@@ -268,8 +313,10 @@ local function project(renderer, mo)
     startfrac = startfrac + xiscale * (vis_x1 - x1)
   end
   local detail = renderer.detailshift or 0
+  local sector = sector_of(world, mo)
   return {
     mo = mo,
+    lightlevel = sector and sector.lightlevel or nil,
     patch = patch,
     w = pw,
     scale = xscale * (2 ^ detail),
@@ -412,10 +459,8 @@ local function draw_one(renderer, fb, spr, clip_walls)
   local cm
   if fuzz then
     cm = rdata.colormap(renderer.res, 6)
-  elseif renderer.fixedcolormap then
-    cm = renderer.fixedcolormap
   else
-    cm = rdata.colormap(renderer.res, 0)
+    cm = sprite_colormap(renderer, spr)
   end
   local frac = spr.startfrac
   for x = spr.x1, spr.x2 do
@@ -504,9 +549,12 @@ function M.draw(renderer, world, fb)
   for i = 1, #world.mobjs do
     local mo = world.mobjs[i]
     if mo.sprite and mo.sprite ~= "" and not mo.player and band(mo.flags or 0, MF_NOSECTOR) == 0 then
-      local item = project(renderer, mo)
-      if item then
-        vis[#vis + 1] = item
+      local sec = sector_of(world, mo)
+      if sec and sec.validcount == world.validcount then
+        local item = project(renderer, world, mo)
+        if item then
+          vis[#vis + 1] = item
+        end
       end
     end
   end

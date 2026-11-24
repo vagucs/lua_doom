@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -14,6 +14,9 @@ local compat = require("compat")
 local tables = require("tables")
 local collision = require("collision")
 local rng = require("random")
+local info = require("info")
+local thinker = require("thinker")
+local wad = require("wad")
 
 local M = {}
 
@@ -47,6 +50,9 @@ local MF_MISSILE = 65536
 local MF_CORPSE = 1048576
 local MF_SKULLFLY = 16777216
 local MF_SHADOW = 262144
+local MF_JUSTATTACKED = 128
+local MF_DROPPED = 131072
+local MF_COUNTITEM = 8388608
 local CF_NOCLIP = 1
 local CF_GODMODE = 2
 local CF_NOMOMENTUM = 4
@@ -57,10 +63,12 @@ local PW_INVULNERABILITY = 0
 local PW_STRENGTH = 1
 local PW_INVISIBILITY = 2
 local PW_IRONFEET = 3
+local PW_ALLMAP = 4
 local PW_INFRARED = 5
 local BT_ATTACK = 1
 local BT_USE = 2
 local BT_CHANGE = 4
+local BT_SPECIAL = 128
 local BT_WEAPONMASK = 56
 local BT_WEAPONSHIFT = 3
 local WP_FIST = 0
@@ -145,13 +153,13 @@ local WEAPON_ATK = {
     { "PUNGC0", 4, true, "", 0, 0 },
     { "PUNGD0", 5, false, "", 0, 0 },
     { "PUNGC0", 4, false, "", 0, 0 },
-    { "PUNGB0", 5, false, "", 0, 0 },
+    { "PUNGB0", 5, false, "", 0, 0, true },
   },
   [WP_PISTOL] = {
     { "PISGA0", 4, false, "", 0, 0 },
     { "PISGB0", 6, true, "PISFA0", 7, 1 },
     { "PISGC0", 4, false, "", 0, 0 },
-    { "PISGB0", 5, false, "", 0, 0 },
+    { "PISGB0", 5, false, "", 0, 0, true },
   },
   [WP_SHOTGUN] = {
     { "SHTGA0", 3, false, "", 0, 0 },
@@ -162,15 +170,17 @@ local WEAPON_ATK = {
     { "SHTGC0", 5, false, "", 0, 0 },
     { "SHTGB0", 5, false, "", 0, 0 },
     { "SHTGA0", 3, false, "", 0, 0 },
-    { "SHTGA0", 7, false, "", 0, 0 },
+    { "SHTGA0", 7, false, "", 0, 0, true },
   },
   [WP_CHAINGUN] = {
     { "CHGGA0", 4, true, "CHGFA0", 5, 1 },
     { "CHGGB0", 4, true, "CHGFB0", 5, 2 },
+    { "CHGGA0", 0, false, "", 0, 0, true },
   },
   [WP_MISSILE] = {
-    { "MISGB0", 8, false, "MISFA0", 15, 1 },
+    { "MISGB0", 8, false, "MISFA0", 3, 1 },
     { "MISGB0", 12, true, "", 0, 2 },
+    { "MISGA0", 0, false, "", 0, 0, true },
   },
   [WP_PLASMA] = {
     { "PLSGA0", 3, true, "PLSFA0", 4, 1 },
@@ -178,9 +188,9 @@ local WEAPON_ATK = {
   },
   [WP_BFG] = {
     { "BFGGA0", 20, false, "", 0, 0 },
-    { "BFGGB0", 10, false, "BFGFA0", 17, 1 },
+    { "BFGGB0", 10, false, "BFGFA0", 11, 1 },
     { "BFGGB0", 10, true, "", 0, 2 },
-    { "BFGGB0", 20, false, "", 0, 0 },
+    { "BFGGB0", 20, false, "", 0, 0, true },
   },
   [WP_CHAINSAW] = {
     { "SAWGA0", 4, true, "", 0, 0 },
@@ -190,13 +200,13 @@ local WEAPON_ATK = {
     { "SHT2A0", 3, false, "", 0, 0 },
     { "SHT2A0", 7, true, "SHT2I0", 9, 1 },
     { "SHT2B0", 7, false, "", 0, 0 },
-    { "SHT2C0", 7, false, "", 0, 0 },
+    { "SHT2C0", 7, false, "", 0, 0, "checkreload" },
     { "SHT2D0", 7, false, "", 0, 0 },
     { "SHT2E0", 7, false, "", 0, 0 },
     { "SHT2F0", 7, false, "", 0, 0 },
     { "SHT2G0", 6, false, "", 0, 0 },
-    { "SHT2H0", 6, false, "", 0, 0 },
-    { "SHT2A0", 5, false, "", 0, 0 },
+    { "SHT2H0", 6, false, "", 0, 0, true },
+    { "SHT2A0", 5, false, "", 0, 0, true },
   },
 }
 
@@ -326,6 +336,8 @@ function M.spawn(world, start, cheats)
     message_tics = 0,
   }
   mo.player = player
+  mo.istate = info.S_PLAY
+  mo.tics = -1
   mo.lastlook = rng.p_random() % 4
   world.mobjs[#world.mobjs + 1] = mo
   collision.set_thing_position(world, mo)
@@ -492,7 +504,11 @@ local function special_sector(world, player, game, leveltime)
   if mo == nil then
     return
   end
-  local sector = collision.point_in_subsector(world, mo.x, mo.y).sector
+  local sub = mo.subsector
+  if sub == nil then
+    sub = collision.point_in_subsector(world, mo.x, mo.y)
+  end
+  local sector = sub.sector
   if mo.z ~= sector.floorheight or sector.special == 0 then
     return
   end
@@ -502,43 +518,56 @@ local function special_sector(world, player, game, leveltime)
     sector.special = 0
     return
   end
-  if spec == 5 or spec == 7 or spec == 4 or spec == 16 or spec == 11 then
-    if (player.powers[PW_IRONFEET] or 0) ~= 0 then
-      return
+  if spec == 11 then
+    player.cheats = band(player.cheats or 0, bnot(CF_GODMODE))
+    if band(leveltime, 31) == 0 and game and game.damage_mobj then
+      game.damage_mobj(mo, nil, 20)
     end
-    if band(leveltime, 31) ~= 0 then
-      return
+    if player.health <= 10 and game and game.specials then
+      game.specials.exit_requested = true
     end
-    if game and game.damage_mobj then
-      local dmg = 0
-      if spec == 5 then
-        dmg = 10
-      elseif spec == 7 then
-        dmg = 5
-      else
-        dmg = 20
-      end
-      game.damage_mobj(mo, nil, dmg)
-    end
+    return
   end
+  if spec ~= 5 and spec ~= 7 and spec ~= 4 and spec ~= 16 then
+    return
+  end
+  if spec == 4 or spec == 16 then
+    if (player.powers[PW_IRONFEET] or 0) ~= 0 and rng.p_random() >= 5 then
+      return
+    end
+  elseif (player.powers[PW_IRONFEET] or 0) ~= 0 then
+    return
+  end
+  if band(leveltime, 31) ~= 0 or not (game and game.damage_mobj) then
+    return
+  end
+  local dmg = 20
+  if spec == 7 then
+    dmg = 5
+  elseif spec == 5 then
+    dmg = 10
+  end
+  game.damage_mobj(mo, nil, dmg)
 end
 
 local function ammo_needed(weapon)
   if weapon == WP_BFG then
     return 40
   end
+  if weapon == WP_SUPERSHOTGUN then
+    return 2
+  end
   return 1
 end
 
 local function gun_shot(player, game, accurate)
   local mo = player.mo
-  local slope = collision.bullet_slope(game.world, mo)
   local damage = 5 * ((rng.p_random() % 3) + 1)
   local angle = mo.angle
   if not accurate then
     angle = as_u32(angle + (rng.p_random() - rng.p_random()) * 262144)
   end
-  return collision.line_attack(game.world, mo, damage, game, MISSILERANGE, angle, slope)
+  return collision.line_attack(game.world, mo, damage, game, MISSILERANGE, angle, collision.bulletslope or 0)
 end
 
 local function do_shot(player, game, ammo_type)
@@ -577,7 +606,6 @@ local function do_shot(player, game, ammo_type)
         game.start_sound("bfg")
       end
     end
-    player.refire = player.refire + 1
     player.attackdown = true
     enemy.noise_alert(game.world, mo, game)
     return
@@ -607,6 +635,7 @@ local function do_shot(player, game, ammo_type)
     if game and game.start_sound then
       game.start_sound("shotgn")
     end
+    collision.bullet_slope(game.world, mo)
     for _ = 1, 7 do
       gun_shot(player, game, false)
     end
@@ -614,20 +643,20 @@ local function do_shot(player, game, ammo_type)
     if game and game.start_sound then
       game.start_sound("dshtgn")
     end
-    local slope = collision.bullet_slope(game.world, mo)
+    collision.bullet_slope(game.world, mo)
     for _ = 1, 20 do
       local damage = 5 * ((rng.p_random() % 3) + 1)
       local angle = as_u32(mo.angle + (rng.p_random() - rng.p_random()) * 524288)
-      local pellet = slope + (rng.p_random() - rng.p_random()) * 32
+      local pellet = (collision.bulletslope or 0) + (rng.p_random() - rng.p_random()) * 32
       collision.line_attack(game.world, mo, damage, game, MISSILERANGE, angle, pellet)
     end
   elseif mo then
     if game and game.start_sound then
       game.start_sound("pistol")
     end
+    collision.bullet_slope(game.world, mo)
     gun_shot(player, game, player.refire == 0)
   end
-  player.refire = player.refire + 1
   player.attackdown = true
   if mo then
     local enemy = require("enemy")
@@ -673,24 +702,66 @@ local function tick_ready(player, game)
   end
 end
 
+local lower_weapon
+local raise_weapon
+local select_fallback
+
 local function enter_atk_step(player, game, ammo_type, firing, can_fire)
   local seq = WEAPON_ATK[player.readyweapon] or WEAPON_ATK[WP_PISTOL]
   while true do
     if player.psprite_step >= #seq then
+      if player.pendingweapon ~= WP_NOCHANGE then
+        lower_weapon(player, game)
+        return
+      end
+      if firing and not can_fire then
+        select_fallback(player, game)
+        lower_weapon(player, game)
+        return
+      end
       if firing and can_fire and player.pendingweapon == WP_NOCHANGE then
         player.psprite_step = 0
-      else
-        start_ready(player, game)
-        if not firing then
-          player.attackdown = false
-          player.refire = 0
-        end
+        else
+          start_ready(player, game)
+          if not firing then
+            player.attackdown = false
+            player.refire = 0
+          end
         return
       end
     else
+      if player.psprite_step == 0 and player.mo and game and game.world then
+        local enemy = require("enemy")
+        enemy.noise_alert(game.world, player.mo, game)
+      end
       local row = seq[player.psprite_step + 1]
-      if row[7] and firing and can_fire and player.pendingweapon == WP_NOCHANGE and (player.health or 0) > 0 then
-        player.psprite_step = 0
+      if row[7] == "checkreload" then
+        if not can_fire then
+          select_fallback(player, game)
+          lower_weapon(player, game)
+          return
+        end
+      elseif row[7] then
+        if firing and player.pendingweapon == WP_NOCHANGE and (player.health or 0) > 0 then
+          player.refire = (player.refire or 0) + 1
+          if can_fire then
+            player.psprite_step = 0
+          else
+            select_fallback(player, game)
+            lower_weapon(player, game)
+            return
+          end
+        else
+          player.refire = 0
+          if not can_fire then
+            select_fallback(player, game)
+            lower_weapon(player, game)
+            return
+          end
+        end
+      end
+      if player.psprite_step == 0 and row[7] and row[7] ~= "checkreload" and firing and can_fire and player.pendingweapon == WP_NOCHANGE and (player.health or 0) > 0 then
+        -- refire restarts the sequence on the next loop
       else
         player.psprite_body = row[1]
         player.psprite_tics = row[2]
@@ -713,7 +784,7 @@ local function enter_atk_step(player, game, ammo_type, firing, can_fire)
   end
 end
 
-local function lower_weapon(player, game)
+lower_weapon = function(player, game)
   player.psprite_state = "down"
   if player.psprite_body == "" then
     player.psprite_body = WEAPON_PATCH[player.readyweapon] or "PISGA0"
@@ -735,9 +806,10 @@ local function lower_weapon(player, game)
   end
   player.psprite_state = "up"
   player.psprite_body = WEAPON_PATCH[player.readyweapon] or "PISGA0"
+  raise_weapon(player, game)
 end
 
-local function raise_weapon(player, game)
+raise_weapon = function(player, game)
   player.psprite_sy = player.psprite_sy - RAISESPEED
   if player.psprite_body == "" then
     player.psprite_body = WEAPON_PATCH[player.readyweapon] or "PISGA0"
@@ -749,6 +821,42 @@ local function raise_weapon(player, game)
   start_ready(player, game)
 end
 
+select_fallback = function(player, game)
+  local commercial = false
+  local shareware = false
+  if game and game.wad then
+    commercial = wad.check_num_for_name(game.wad, "MAP01") >= 0
+    shareware = (not commercial) and wad.check_num_for_name(game.wad, "E2M1") < 0
+  end
+  if player.weaponowned[WP_PLASMA] and (player.ammo[AM_CELL] or 0) ~= 0 and not shareware then
+    player.pendingweapon = WP_PLASMA
+  elseif player.weaponowned[WP_SUPERSHOTGUN] and (player.ammo[AM_SHELL] or 0) > 2 and commercial then
+    player.pendingweapon = WP_SUPERSHOTGUN
+  elseif player.weaponowned[WP_CHAINGUN] and (player.ammo[AM_CLIP] or 0) ~= 0 then
+    player.pendingweapon = WP_CHAINGUN
+  elseif player.weaponowned[WP_SHOTGUN] and (player.ammo[AM_SHELL] or 0) ~= 0 then
+    player.pendingweapon = WP_SHOTGUN
+  elseif (player.ammo[AM_CLIP] or 0) ~= 0 then
+    player.pendingweapon = WP_PISTOL
+  elseif player.weaponowned[WP_CHAINSAW] then
+    player.pendingweapon = WP_CHAINSAW
+  elseif player.weaponowned[WP_MISSILE] and (player.ammo[AM_MISL] or 0) ~= 0 then
+    player.pendingweapon = WP_MISSILE
+  elseif player.weaponowned[WP_BFG] and (player.ammo[AM_CELL] or 0) > 40 and not shareware then
+    player.pendingweapon = WP_BFG
+  else
+    player.pendingweapon = WP_FIST
+  end
+end
+
+local function weapon_ready_bob(player, game)
+  local lt = game and game.leveltime or 0
+  local angle = band(128 * lt, FINEMASK)
+  angle = band(angle, math.floor(FINEANGLES / 2) - 1)
+  local s = tables.fine_sin(angle * 524288) or 0
+  player.psprite_sy = WEAPONTOP + fixed_mul(player.bob or 0, s)
+end
+
 local function weapon_think(player, game)
   if player.playerstate == PST_DEAD or player.health <= 0 then
     lower_weapon(player, game)
@@ -757,24 +865,7 @@ local function weapon_think(player, game)
   local cmd = player.cmd
   local firing = band(cmd.buttons, BT_ATTACK) ~= 0
   local ammo_type = WEAPON_AMMO[player.readyweapon]
-  local can_fire = true
-  local need = ammo_needed(player.readyweapon)
-  if ammo_type ~= nil and player.ammo[ammo_type] < need then
-    can_fire = player.readyweapon == WP_FIST or player.readyweapon == WP_CHAINSAW
-    if not can_fire then
-      local order = { WP_PISTOL, WP_SHOTGUN, WP_CHAINGUN, WP_MISSILE, WP_PLASMA, WP_BFG, WP_FIST }
-      for i = 1, #order do
-        local w = order[i]
-        local at = WEAPON_AMMO[w]
-        if player.weaponowned[w] and (at == nil or player.ammo[at] >= ammo_needed(w)) then
-          player.pendingweapon = w
-          break
-        end
-      end
-      ammo_type = WEAPON_AMMO[player.readyweapon]
-      can_fire = ammo_type == nil or player.ammo[ammo_type] >= ammo_needed(player.readyweapon)
-    end
-  end
+  local can_fire = ammo_type == nil or player.ammo[ammo_type] >= ammo_needed(player.readyweapon)
   if player.flash_tics > 0 then
     player.flash_tics = player.flash_tics - 1
     if player.flash_tics <= 0 then
@@ -799,12 +890,19 @@ local function weapon_think(player, game)
     enter_atk_step(player, game, ammo_type, firing, can_fire)
     return
   end
+  if player.psprite_state == "up" then
+    raise_weapon(player, game)
+    if player.psprite_state == "up" then
+      return
+    end
+  end
   if player.pendingweapon ~= WP_NOCHANGE or player.psprite_state == "down" then
     lower_weapon(player, game)
     return
   end
-  if player.psprite_state == "up" then
-    raise_weapon(player, game)
+  if firing and not can_fire then
+    select_fallback(player, game)
+    lower_weapon(player, game)
     return
   end
   if firing and can_fire then
@@ -812,7 +910,6 @@ local function weapon_think(player, game)
     if ready_gate then
       player.psprite_state = "atk"
       player.psprite_step = 0
-      player.psprite_sy = WEAPONTOP
       player.attackdown = true
       enter_atk_step(player, game, ammo_type, firing, can_fire)
       return
@@ -820,9 +917,11 @@ local function weapon_think(player, game)
   end
   if player.psprite_state ~= "ready" then
     start_ready(player, game)
+    weapon_ready_bob(player, game)
     return
   end
   tick_ready(player, game)
+  weapon_ready_bob(player, game)
   if not firing then
     player.attackdown = false
     player.refire = 0
@@ -839,8 +938,6 @@ local function death_think(world, player, game, leveltime)
     player.viewheight = 6 * FRACUNIT
   end
   player.deltaviewheight = 0
-  M.xy_movement(world, mo, game)
-  M.z_movement(mo, world, game)
   calc_height(player, leveltime)
   if player.attacker and player.attacker ~= mo then
     local angle = collision.angle_to(mo.x, mo.y, player.attacker.x, player.attacker.y)
@@ -854,7 +951,8 @@ local function death_think(world, player, game, leveltime)
     elseif delta < as_u32(ANG180) then
       mo.angle = as_u32(mo.angle + ang5)
     else
-      mo.angle = as_u32(mo.angle - ang5)
+      -- ANG90/18 is not an integer. int(angle - ANG90/18) drops one more unit than floor.
+      mo.angle = as_u32(mo.angle - (ang5 + 1))
     end
   elseif player.damagecount ~= 0 then
     player.damagecount = player.damagecount - 1
@@ -868,22 +966,52 @@ end
 function M.think(world, player, game, leveltime)
   local mo = player.mo
   local cmd = player.cmd
+  if has(mo.flags, MF_JUSTATTACKED) then
+    cmd.angleturn = 0
+    cmd.forwardmove = 100
+    cmd.sidemove = 0
+    mo.flags = band(mo.flags, bnot(MF_JUSTATTACKED))
+  end
   if player.playerstate == PST_DEAD then
     death_think(world, player, game, leveltime)
     return
   end
-  mo.angle = as_u32(mo.angle + cmd.angleturn * 65536)
-  local onground = mo.z <= mo.floorz
-  if cmd.forwardmove ~= 0 and onground then
-    M.thrust(mo, mo.angle, cmd.forwardmove * 2048)
+  if (mo.reactiontime or 0) ~= 0 then
+    mo.reactiontime = mo.reactiontime - 1
+  else
+    mo.angle = as_u32(mo.angle + cmd.angleturn * 65536)
+    local onground = mo.z <= mo.floorz
+    if cmd.forwardmove ~= 0 and onground then
+      M.thrust(mo, mo.angle, cmd.forwardmove * 2048)
+    end
+    if cmd.sidemove ~= 0 and onground then
+      M.thrust(mo, as_u32(mo.angle - ANG90), cmd.sidemove * 2048)
+    end
+    if (cmd.forwardmove ~= 0 or cmd.sidemove ~= 0) and mo.istate == info.S_PLAY then
+      thinker.set_mobj_state(mo, info.S_PLAY_RUN1, world, game)
+    end
   end
-  if cmd.sidemove ~= 0 and onground then
-    M.thrust(mo, as_u32(mo.angle - ANG90), cmd.sidemove * 2048)
-  end
-  M.xy_movement(world, mo, game)
-  M.z_movement(mo, world, game)
   calc_height(player, leveltime)
   special_sector(world, player, game, leveltime)
+  if band(cmd.buttons, BT_SPECIAL) ~= 0 then
+    cmd.buttons = 0
+  end
+  if band(cmd.buttons, BT_CHANGE) ~= 0 then
+    local neww = math.floor(band(cmd.buttons, BT_WEAPONMASK) / (2 ^ BT_WEAPONSHIFT))
+    if neww == WP_FIST and player.weaponowned[WP_CHAINSAW]
+      and not (player.readyweapon == WP_CHAINSAW and (player.powers[PW_STRENGTH] or 0) ~= 0) then
+      neww = WP_CHAINSAW
+    end
+    local commercial = game and game.wad and wad.check_num_for_name(game.wad, "MAP01") >= 0
+    local shareware = (not commercial) and game and game.wad and wad.check_num_for_name(game.wad, "E2M1") < 0
+    if commercial and neww == WP_SHOTGUN and player.weaponowned[WP_SUPERSHOTGUN] and player.readyweapon ~= WP_SUPERSHOTGUN then
+      neww = WP_SUPERSHOTGUN
+    end
+    if player.weaponowned[neww] and neww ~= player.readyweapon and neww >= 0 and neww <= WP_SUPERSHOTGUN
+      and ((neww ~= WP_PLASMA and neww ~= WP_BFG) or not shareware) then
+      player.pendingweapon = neww
+    end
+  end
   if band(cmd.buttons, BT_USE) ~= 0 then
     if not player.usedown then
       collision.use_lines(world, player, game)
@@ -891,12 +1019,6 @@ function M.think(world, player, game, leveltime)
     end
   else
     player.usedown = false
-  end
-  if band(cmd.buttons, BT_CHANGE) ~= 0 then
-    local neww = math.floor(band(cmd.buttons, BT_WEAPONMASK) / (2 ^ BT_WEAPONSHIFT))
-    if neww >= 0 and neww <= WP_SUPERSHOTGUN and player.weaponowned[neww] and neww ~= player.readyweapon then
-      player.pendingweapon = neww
-    end
   end
   weapon_think(player, game)
   if (player.powers[PW_STRENGTH] or 0) ~= 0 then
@@ -1137,6 +1259,231 @@ local KEY_CARD = {
   [39] = 4,
   [38] = 5,
 }
+
+local CLIPAMMO = { [0] = 10, 4, 20, 1 }
+
+local PICKUP = {
+  [2011] = { "health", 10 },
+  [2012] = { "health", 25 },
+  [2014] = { "bonus_h", 1 },
+  [2015] = { "bonus_a", 1 },
+  [2018] = { "armor", 1 },
+  [2019] = { "armor", 2 },
+  [83] = { "mega", 0 },
+  [2013] = { "soul", 0 },
+  [2022] = { "item", "Invulnerability" },
+  [2023] = { "berserk", 0 },
+  [2024] = { "item", "Partial invisibility" },
+  [2025] = { "item", "Radiation shielding" },
+  [2026] = { "item", "Computer area map" },
+  [2045] = { "item", "Light amplification visor" },
+  [5] = { "key", 0 },
+  [6] = { "key", 1 },
+  [13] = { "key", 2 },
+  [40] = { "key", 3 },
+  [39] = { "key", 4 },
+  [38] = { "key", 5 },
+  [2001] = { "weapon", WP_SHOTGUN },
+  [82] = { "weapon", WP_SUPERSHOTGUN },
+  [2002] = { "weapon", WP_CHAINGUN },
+  [2003] = { "weapon", WP_MISSILE },
+  [2004] = { "weapon", WP_PLASMA },
+  [2005] = { "weapon", WP_CHAINSAW },
+  [2006] = { "weapon", WP_BFG },
+  [2007] = { "ammo", { AM_CLIP, 1 } },
+  [2048] = { "ammo", { AM_CLIP, 5 } },
+  [2008] = { "ammo", { AM_SHELL, 1 } },
+  [2049] = { "ammo", { AM_SHELL, 5 } },
+  [2047] = { "ammo", { AM_CELL, 1 } },
+  [17] = { "ammo", { AM_CELL, 5 } },
+  [2010] = { "ammo", { AM_MISL, 1 } },
+  [2046] = { "ammo", { AM_MISL, 5 } },
+  [8] = { "backpack", 0 },
+}
+
+local WEAPON_AMMO_GIVE = {
+  [WP_SHOTGUN] = AM_SHELL,
+  [WP_SUPERSHOTGUN] = AM_SHELL,
+  [WP_CHAINGUN] = AM_CLIP,
+  [WP_MISSILE] = AM_MISL,
+  [WP_PLASMA] = AM_CELL,
+  [WP_BFG] = AM_CELL,
+}
+
+local ITEM_POWER = {
+  ["Invulnerability"] = PW_INVULNERABILITY,
+  ["Partial invisibility"] = PW_INVISIBILITY,
+  ["Radiation shielding"] = PW_IRONFEET,
+  ["Computer area map"] = PW_ALLMAP,
+  ["Light amplification visor"] = PW_INFRARED,
+}
+
+local function give_ammo(player, ammo, num, game)
+  if ammo < 0 or ammo > 3 then
+    return false
+  end
+  if (player.ammo[ammo] or 0) >= (player.maxammo[ammo] or 0) then
+    return false
+  end
+  local old = player.ammo[ammo] or 0
+  local add = CLIPAMMO[ammo] or 0
+  if num ~= 0 then
+    add = add * num
+  else
+    add = math.floor(add / 2)
+  end
+  local skill = game and game.skill or 2
+  if skill == 0 or skill == 4 then
+    add = add * 2
+  end
+  player.ammo[ammo] = math.min(player.maxammo[ammo] or 0, old + add)
+  if old ~= 0 then
+    return true
+  end
+  if ammo == AM_CLIP and player.readyweapon == WP_FIST then
+    player.pendingweapon = player.weaponowned[WP_CHAINGUN] and WP_CHAINGUN or WP_PISTOL
+  elseif ammo == AM_SHELL and (player.readyweapon == WP_FIST or player.readyweapon == WP_PISTOL) and player.weaponowned[WP_SHOTGUN] then
+    player.pendingweapon = WP_SHOTGUN
+  elseif ammo == AM_CELL and (player.readyweapon == WP_FIST or player.readyweapon == WP_PISTOL) and player.weaponowned[WP_PLASMA] then
+    player.pendingweapon = WP_PLASMA
+  elseif ammo == AM_MISL and player.readyweapon == WP_FIST and player.weaponowned[WP_MISSILE] then
+    player.pendingweapon = WP_MISSILE
+  end
+  return true
+end
+
+function M.touch_special(game, special, toucher)
+  if special == nil or toucher == nil then
+    return
+  end
+  local delta = (special.z or 0) - (toucher.z or 0)
+  if delta > (toucher.height or 0) or delta < -8 * FRACUNIT then
+    return
+  end
+  local player = toucher.player
+  if player == nil or special.alive == false or (toucher.health or 0) <= 0 then
+    return
+  end
+  local spec = PICKUP[special.doomednum]
+  if spec == nil then
+    return
+  end
+  local kind, extra = spec[1], spec[2]
+  local taken = true
+  local sfx = "itemup"
+  if kind == "health" then
+    if (player.health or 0) >= MAXHEALTH then
+      taken = false
+    else
+      player.health = math.min(MAXHEALTH, (player.health or 0) + extra)
+      if player.mo then
+        player.mo.health = player.health
+      end
+    end
+  elseif kind == "bonus_h" then
+    player.health = math.min(200, (player.health or 0) + 1)
+    if player.mo then
+      player.mo.health = player.health
+    end
+  elseif kind == "bonus_a" then
+    player.armorpoints = math.min(200, (player.armorpoints or 0) + 1)
+    if (player.armortype or 0) == 0 then
+      player.armortype = 1
+    end
+  elseif kind == "armor" then
+    local points = extra == 1 and 100 or 200
+    if (player.armorpoints or 0) >= points then
+      taken = false
+    else
+      player.armorpoints = points
+      player.armortype = extra
+    end
+  elseif kind == "soul" then
+    player.health = math.min(200, (player.health or 0) + 100)
+    if player.mo then
+      player.mo.health = player.health
+    end
+  elseif kind == "mega" then
+    player.health = 200
+    if player.mo then
+      player.mo.health = 200
+    end
+    player.armorpoints = 200
+    player.armortype = 2
+  elseif kind == "berserk" then
+    taken = M.give_power(player, PW_STRENGTH)
+    if taken and player.readyweapon ~= WP_FIST then
+      player.pendingweapon = WP_FIST
+    end
+    if taken then
+      sfx = "getpow"
+    end
+  elseif kind == "key" then
+    player.cards[extra] = true
+  elseif kind == "weapon" then
+    local w = extra
+    local clips = 2
+    if band(special.flags or 0, MF_DROPPED) ~= 0 then
+      clips = 1
+    end
+    local gave_ammo = false
+    local at = WEAPON_AMMO_GIVE[w]
+    if at ~= nil then
+      gave_ammo = give_ammo(player, at, clips, game)
+    end
+    local gave_weapon = false
+    if not player.weaponowned[w] then
+      gave_weapon = true
+      player.weaponowned[w] = true
+      player.pendingweapon = w
+    end
+    taken = gave_weapon or gave_ammo
+    if taken then
+      sfx = "wpnup"
+    end
+  elseif kind == "ammo" then
+    taken = give_ammo(player, extra[1], extra[2], game)
+  elseif kind == "backpack" then
+    for i = 0, 3 do
+      local cap = player.maxammo[i] or 0
+      if cap < 400 then
+        player.maxammo[i] = cap * 2
+      end
+      give_ammo(player, i, 1, game)
+    end
+  elseif kind == "item" then
+    local pw = ITEM_POWER[extra]
+    if pw == nil then
+      taken = false
+    else
+      taken = M.give_power(player, pw)
+      if taken then
+        sfx = "getpow"
+      end
+    end
+  else
+    taken = false
+  end
+  if not taken or game == nil or game.world == nil then
+    return
+  end
+  if game.start_sound then
+    game.start_sound(sfx)
+  end
+  player.bonuscount = (player.bonuscount or 0) + 6
+  if band(special.flags or 0, MF_COUNTITEM) ~= 0 then
+    player.itemcount = (player.itemcount or 0) + 1
+  end
+  special.alive = false
+  special.flags = 0
+  local mobjs = game.world.mobjs
+  for i = 1, #mobjs do
+    if mobjs[i] == special then
+      table.remove(mobjs, i)
+      break
+    end
+  end
+end
 
 function M.take_key(special, toucher)
   local player = toucher and toucher.player

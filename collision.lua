@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -113,24 +113,24 @@ local function box_on_line_side(bbox, line)
   local p1, p2
   if line.dx == 0 then
     p1 = 0
-    if bbox[BOXRIGHT] >= line.v1.x then
+    if bbox[BOXRIGHT] < line.v1.x then
       p1 = 1
     end
     p2 = 0
-    if bbox[BOXLEFT] >= line.v1.x then
+    if bbox[BOXLEFT] < line.v1.x then
       p2 = 1
     end
-    if line.dy > 0 then
+    if line.dy < 0 then
       p1 = bxor(p1, 1)
       p2 = bxor(p2, 1)
     end
   elseif line.dy == 0 then
     p1 = 0
-    if bbox[BOXTOP] <= line.v1.y then
+    if bbox[BOXTOP] > line.v1.y then
       p1 = 1
     end
     p2 = 0
-    if bbox[BOXBOTTOM] <= line.v1.y then
+    if bbox[BOXBOTTOM] > line.v1.y then
       p2 = 1
     end
     if line.dx < 0 then
@@ -172,11 +172,11 @@ function M.line_opening(line)
 end
 
 function M.approx_distance(dx, dy)
-  dx, dy = math.abs(dx), math.abs(dy)
+  dx, dy = math.abs(as_i32(dx)), math.abs(as_i32(dy))
   if dx < dy then
-    dx, dy = dy, dx
+    return dx + dy - math.floor(dx / 2)
   end
-  return dx + math.floor(dy / 2)
+  return dx + dy - math.floor(dy / 2)
 end
 
 function M.angle_to(x1, y1, x2, y2)
@@ -237,6 +237,7 @@ function M.unset_thing_position(world, thing)
 end
 
 function M.set_thing_position(world, thing)
+  thing.subsector = M.point_in_subsector(world, thing.x, thing.y)
   if thing.blocklinked then
     M.unset_thing_position(world, thing)
   end
@@ -281,6 +282,71 @@ local function block_things(world, x, y, func)
     end
     mo = nxt
   end
+  return true
+end
+
+local function pit_stomp_thing(tm, other, game)
+  if not has(other.flags, MF_SHOOTABLE) then
+    return true
+  end
+  local blockdist = (other.radius or 0) + (tm.radius or 0)
+  if math.abs(other.x - tm._tmx) >= blockdist or math.abs(other.y - tm._tmy) >= blockdist then
+    return true
+  end
+  if other == tm then
+    return true
+  end
+  local mapn = 0
+  if game ~= nil then
+    mapn = game.mapn or 0
+  end
+  if tm.player == nil and mapn ~= 30 then
+    return false
+  end
+  if game and game.damage_mobj then
+    game.damage_mobj(other, tm, 10000, tm)
+  end
+  return true
+end
+
+function M.teleport_move(world, thing, x, y, game)
+  thing._tmx = x
+  thing._tmy = y
+  local r = thing.radius or 0
+  local bbox = {
+    [BOXLEFT] = x - r,
+    [BOXRIGHT] = x + r,
+    [BOXBOTTOM] = y - r,
+    [BOXTOP] = y + r,
+  }
+  local sub = M.point_in_subsector(world, x, y)
+  local tmfloorz = sub.sector.floorheight
+  local tmceilingz = sub.sector.ceilingheight
+  world.validcount = (world.validcount or 0) + 1
+  local links = world.blocklinks
+  if links and world.bmapwidth and world.bmapwidth > 0 then
+    local orgx = world.bmaporgx
+    local orgy = world.bmaporgy
+    local xl = shar(bbox[BOXLEFT] - orgx - MAXRADIUS, MAPBLOCKSHIFT)
+    local xh = shar(bbox[BOXRIGHT] - orgx + MAXRADIUS, MAPBLOCKSHIFT)
+    local yl = shar(bbox[BOXBOTTOM] - orgy - MAXRADIUS, MAPBLOCKSHIFT)
+    local yh = shar(bbox[BOXTOP] - orgy + MAXRADIUS, MAPBLOCKSHIFT)
+    for bx = xl, xh do
+      for by = yl, yh do
+        if not block_things(world, bx, by, function(th)
+          return pit_stomp_thing(thing, th, game)
+        end) then
+          return false
+        end
+      end
+    end
+  end
+  M.unset_thing_position(world, thing)
+  thing.floorz = tmfloorz
+  thing.ceilingz = tmceilingz
+  thing.x = x
+  thing.y = y
+  M.set_thing_position(world, thing)
   return true
 end
 
@@ -353,15 +419,25 @@ local function pit_thing(world, tm, other, game)
     return true
   end
   if has(tm.flags, MF_SKULLFLY) then
-    local dmg = ((rng.p_random() % 8) + 1) * (tm.damage or 0)
+    local info = require("info")
+    local thinker = require("thinker")
+    local base = info.MOBJINFO[tm.type or 0][info.MI_DAMAGE] or 0
+    local dmg = ((rng.p_random() % 8) + 1) * base
     if game and game.damage_mobj then
       game.damage_mobj(other, tm, dmg, tm)
     end
     tm.flags = band(tm.flags, bnot(MF_SKULLFLY))
     tm.momx, tm.momy, tm.momz = 0, 0, 0
+    thinker.set_mobj_state(tm, info.MOBJINFO[tm.type or 0][info.MI_SPAWNSTATE], world, game)
     return false
   end
   if has(tm.flags, MF_MISSILE) then
+    if tm.z > other.z + (other.height or 0) then
+      return true
+    end
+    if tm.z + (tm.height or 0) < other.z then
+      return true
+    end
     local target = tm.target
     if target and same_species(target, other) then
       if other == target then
@@ -374,10 +450,11 @@ local function pit_thing(world, tm, other, game)
     if not has(other.flags, MF_SHOOTABLE) then
       return not has(other.flags, MF_SOLID)
     end
-    if not M.missile_reaches(tm, other, tm._tmx, tm._tmy, tm.z) then
-      return true
+    if game and game.damage_mobj then
+      local info = require("info")
+      local base = tm.damage or info.MOBJINFO[tm.type or 0][info.MI_DAMAGE] or 0
+      game.damage_mobj(other, tm.target, ((rng.p_random() % 8) + 1) * base, tm)
     end
-    tm.struck = other
     return false
   end
   if has(other.flags, MF_SPECIAL) then
@@ -541,6 +618,91 @@ end
 local earlyout = false
 local intercepts = {}
 local trace = { x = 0, y = 0, dx = 0, dy = 0 }
+local MAXINTERCEPTS_ORIGINAL = 128
+M.bulletslope = 0
+local open_top, open_bottom, open_range, low_floor = 0, 0, 0, 0
+local overrun_world = nil
+local playerstarts = {}
+for _psi = 1, 8 do
+  playerstarts[_psi] = { 0, 0, 0, 0, 0 }
+end
+local OVERRUN_TABLE = {
+  { 4, nil, false }, { 4, nil, false }, { 4, nil, false },
+  { 4, "lowfloor", false }, { 4, "openbottom", false }, { 4, "opentop", false },
+  { 4, "openrange", false }, { 4, nil, false }, { 120, nil, false }, { 8, nil, false },
+  { 4, "bulletslope", false }, { 4, nil, false }, { 4, nil, false }, { 4, nil, false },
+  { 40, "playerstarts", true }, { 4, nil, false }, { 4, "bmapwidth", false },
+  { 4, nil, false }, { 4, "bmaporgx", false }, { 4, "bmaporgy", false },
+  { 4, nil, false }, { 4, "bmapheight", false },
+}
+
+local function as_i16(n)
+  n = band(n, 65535)
+  if n >= 32768 then
+    return n - 65536
+  end
+  return n
+end
+
+local function overrun_set_player_start(index, value)
+  local thing = math.floor(index / 5)
+  local field = index % 5
+  local row = playerstarts[thing + 1]
+  if row == nil then
+    return
+  end
+  row[field + 1] = as_i16(value)
+end
+
+local function intercepts_memory_overrun(location, value)
+  local offset = 0
+  for i = 1, #OVERRUN_TABLE do
+    local length, name, int16_array = OVERRUN_TABLE[i][1], OVERRUN_TABLE[i][2], OVERRUN_TABLE[i][3]
+    if offset + length > location then
+      if name == nil then
+        return
+      end
+      if int16_array then
+        local index = math.floor((location - offset) / 2)
+        overrun_set_player_start(index, band(value, 65535))
+        overrun_set_player_start(index + 1, band(math.floor(value / 65536), 65535))
+      elseif name == "lowfloor" then
+        low_floor = value
+      elseif name == "openbottom" then
+        open_bottom = value
+      elseif name == "opentop" then
+        open_top = value
+      elseif name == "openrange" then
+        open_range = value
+      elseif name == "bulletslope" then
+        M.bulletslope = value
+      elseif overrun_world ~= nil then
+        if name == "bmapwidth" then
+          overrun_world.bmapwidth = value
+        elseif name == "bmaporgx" then
+          overrun_world.bmaporgx = value
+        elseif name == "bmaporgy" then
+          overrun_world.bmaporgy = value
+        elseif name == "bmapheight" then
+          overrun_world.bmapheight = value
+        end
+      end
+      return
+    end
+    offset = offset + length
+  end
+end
+
+local function intercepts_overrun(inn)
+  local num = #intercepts - 1
+  if num <= MAXINTERCEPTS_ORIGINAL then
+    return
+  end
+  local location = (num - MAXINTERCEPTS_ORIGINAL - 1) * 12
+  intercepts_memory_overrun(location, inn.frac)
+  intercepts_memory_overrun(location + 4, inn.isaline and 1 or 0)
+  intercepts_memory_overrun(location + 8, 0)
+end
 
 local function div_trace()
   return { x = trace.x, y = trace.y, dx = trace.dx, dy = trace.dy }
@@ -619,7 +781,9 @@ local function add_line_intercept(ld)
   if earlyout and frac < FRACUNIT and ld.backsector == nil then
     return false
   end
-  intercepts[#intercepts + 1] = { frac = frac, isaline = true, line = ld, thing = nil }
+  local inn = { frac = frac, isaline = true, line = ld, thing = nil }
+  intercepts[#intercepts + 1] = inn
+  intercepts_overrun(inn)
   return true
 end
 
@@ -642,7 +806,9 @@ local function add_thing_intercept(thing)
   if frac < 0 then
     return true
   end
-  intercepts[#intercepts + 1] = { frac = frac, isaline = false, line = nil, thing = thing }
+  local inn = { frac = frac, isaline = false, line = nil, thing = thing }
+  intercepts[#intercepts + 1] = inn
+  intercepts_overrun(inn)
   return true
 end
 
@@ -671,6 +837,7 @@ local function traverse_intercepts(func, maxfrac)
 end
 
 function M.path_traverse(world, x1, y1, x2, y2, flags, trav)
+  overrun_world = world
   earlyout = band(flags, PT_EARLYOUT) ~= 0
   world.validcount = (world.validcount or 0) + 1
   intercepts = {}
@@ -775,51 +942,34 @@ local function hit_slide_line(thing, line, tmx, tmy)
   return fixed_mul(newlen, tables.fine_cos(lineangle)), fixed_mul(newlen, tables.fine_sin(lineangle))
 end
 
-local function slide_blocks(thing, li)
-  if not has(li.flags, ML_TWOSIDED) or li.backsector == nil then
-    return M.point_on_line_side(thing.x, thing.y, li) == 0
-  end
-  local opentop, openbottom = M.line_opening(li)
-  if opentop - openbottom < thing.height then
-    return true
-  end
-  if opentop - thing.z < thing.height then
-    return true
-  end
-  if openbottom - thing.z > 24 * FRACUNIT then
-    return true
-  end
-  return has(li.flags, ML_BLOCKING)
-end
-
-local function intercept_frac(x1, y1, x2, y2, line)
-  local u = FRACUNIT
-  local ax, ay = x1 / u, y1 / u
-  local bx, by = x2 / u, y2 / u
-  local cx, cy = line.v1.x / u, line.v1.y / u
-  local dx, dy = line.v2.x / u, line.v2.y / u
-  local den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx)
-  if math.abs(den) < 1e-8 then
-    return -1
-  end
-  local t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den
-  local v = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den
-  if t < 0 or t > 1 or v < 0 or v > 1 then
-    return -1
-  end
-  return math.floor(t * u)
-end
-
 local function trace_slide_corner(world, thing, x1, y1, x2, y2, best)
-  local lines = world.lines
-  for i = 1, #lines do
-    local ln = lines[i]
-    local frac = intercept_frac(x1, y1, x2, y2, ln)
-    if frac >= 0 and frac <= FRACUNIT and slide_blocks(thing, ln) and frac < best[1] then
-      best[1] = frac
-      best[2] = ln
+  M.path_traverse(world, x1, y1, x2, y2, PT_ADDLINES, function(inn)
+    local li = inn.line
+    local blocking = false
+    if not has(li.flags, ML_TWOSIDED) then
+      if M.point_on_line_side(thing.x, thing.y, li) ~= 0 then
+        return true
+      end
+      blocking = true
+    else
+      local opentop, openbottom = M.line_opening(li)
+      if opentop - openbottom < (thing.height or 0) then
+        blocking = true
+      elseif opentop - thing.z < (thing.height or 0) then
+        blocking = true
+      elseif openbottom - thing.z > 24 * FRACUNIT then
+        blocking = true
+      end
     end
-  end
+    if not blocking then
+      return true
+    end
+    if inn.frac < best[1] then
+      best[1] = inn.frac
+      best[2] = li
+    end
+    return false
+  end)
 end
 
 function M.slide_move(world, thing, momx, momy, game)
@@ -1024,9 +1174,11 @@ function M.bullet_slope(world, source)
   for i = 1, 3 do
     local slope, target = aim(world, source, angles[i], span)
     if target then
+      M.bulletslope = slope
       return slope
     end
   end
+  M.bulletslope = 0
   return 0
 end
 
@@ -1194,9 +1346,144 @@ local function intercept_frac(x1, y1, x2, y2, line)
   return math.floor(t * FRACUNIT)
 end
 
+local NF_SUBSECTOR = 32768
+
+local function shar64(n, bits)
+  return math.floor(n / (2 ^ bits))
+end
+
+local function sight_side(x, y, lx, ly, ldx, ldy)
+  if ldx == 0 then
+    if x == lx then
+      return 2
+    end
+    if x <= lx then
+      return ldy > 0 and 1 or 0
+    end
+    return ldy < 0 and 1 or 0
+  end
+  if ldy == 0 then
+    if x == ly then
+      return 2
+    end
+    if y <= ly then
+      return ldx < 0 and 1 or 0
+    end
+    return ldx > 0 and 1 or 0
+  end
+  local dx = shar64(x - lx, FRACBITS)
+  local dy = shar64(y - ly, FRACBITS)
+  local left = shar64(ldy, FRACBITS) * dx
+  local right = dy * shar64(ldx, FRACBITS)
+  if right < left then
+    return 0
+  end
+  if left == right then
+    return 2
+  end
+  return 1
+end
+
+local function intercept_vector(v2, v1)
+  local den = as_i32(fixed_mul(shar(v1.dy, 8), v2.dx) - fixed_mul(shar(v1.dx, 8), v2.dy))
+  if den == 0 then
+    return 0
+  end
+  local num = as_i32(fixed_mul(shar(v1.x - v2.x, 8), v1.dy) + fixed_mul(shar(v2.y - v1.y, 8), v1.dx))
+  return fixed_div(num, den)
+end
+
+local function cross_sight_subsector(world, num, st)
+  if num < 0 or num >= #world.subsectors then
+    num = 0
+  end
+  local sub = world.subsectors[num + 1]
+  local n_seg = sub.firstline
+  for _ = 1, sub.numlines do
+    local seg = world.segs[n_seg + 1]
+    n_seg = n_seg + 1
+    local line = seg and seg.linedef
+    if seg ~= nil and line ~= nil and line.v1 ~= nil and line.v2 ~= nil then
+      if line.validcount ~= world.validcount then
+        line.validcount = world.validcount
+        local s1 = sight_side(line.v1.x, line.v1.y, st.x, st.y, st.dx, st.dy)
+        local s2 = sight_side(line.v2.x, line.v2.y, st.x, st.y, st.dx, st.dy)
+        if s1 ~= s2 then
+          local ldx = as_i32(line.v2.x - line.v1.x)
+          local ldy = as_i32(line.v2.y - line.v1.y)
+          s1 = sight_side(st.x, st.y, line.v1.x, line.v1.y, ldx, ldy)
+          s2 = sight_side(st.t2x, st.t2y, line.v1.x, line.v1.y, ldx, ldy)
+          if s1 ~= s2 then
+            if line.backsector == nil or band(line.flags, ML_TWOSIDED) == 0 then
+              return false
+            end
+            local front = seg.frontsector
+            local back = seg.backsector
+            if front == nil or back == nil then
+              return false
+            end
+            if not (front.floorheight == back.floorheight and front.ceilingheight == back.ceilingheight) then
+              local opentop = math.min(front.ceilingheight, back.ceilingheight)
+              local openbottom = math.max(front.floorheight, back.floorheight)
+              if openbottom >= opentop then
+                return false
+              end
+              local frac = intercept_vector(
+                { x = st.x, y = st.y, dx = st.dx, dy = st.dy },
+                { x = line.v1.x, y = line.v1.y, dx = ldx, dy = ldy }
+              )
+              if front.floorheight ~= back.floorheight then
+                local slope = fixed_div(openbottom - st.z, frac)
+                if slope > st.bottom then
+                  st.bottom = slope
+                end
+              end
+              if front.ceilingheight ~= back.ceilingheight then
+                local slope = fixed_div(opentop - st.z, frac)
+                if slope < st.top then
+                  st.top = slope
+                end
+              end
+              if st.top <= st.bottom then
+                return false
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  return true
+end
+
+local function cross_sight_bsp(world, bspnum, st)
+  if band(bspnum, NF_SUBSECTOR) ~= 0 or bspnum < 0 then
+    if band(bspnum, 65535) == 65535 then
+      return cross_sight_subsector(world, 0, st)
+    end
+    return cross_sight_subsector(world, band(bspnum, 32767), st)
+  end
+  if bspnum >= #world.nodes then
+    return true
+  end
+  local node = world.nodes[bspnum + 1]
+  local side = sight_side(st.x, st.y, node.x, node.y, node.dx, node.dy)
+  if side == 2 then
+    side = 0
+  end
+  if not cross_sight_bsp(world, node.children[side + 1], st) then
+    return false
+  end
+  local other = sight_side(st.t2x, st.t2y, node.x, node.y, node.dx, node.dy)
+  if side == other then
+    return true
+  end
+  return cross_sight_bsp(world, node.children[bxor(side, 1) + 1], st)
+end
+
 function M.check_sight(world, t1, t2)
-  local s1 = M.point_in_subsector(world, t1.x, t1.y).sector
-  local s2 = M.point_in_subsector(world, t2.x, t2.y).sector
+  local s1 = (t1.subsector or M.point_in_subsector(world, t1.x, t1.y)).sector
+  local s2 = (t2.subsector or M.point_in_subsector(world, t2.x, t2.y)).sector
   local nsec = #world.sectors
   local rej = world.rejectmatrix or ""
   if nsec > 0 and #rej > 0 then
@@ -1207,26 +1494,23 @@ function M.check_sight(world, t1, t2)
       return false
     end
   end
-  if s1 == s2 then
-    return true
+  local eye = t1.z + (t1.height or 0) - shar(t1.height or 0, 2)
+  local st = {
+    top = (t2.z + (t2.height or 0)) - eye,
+    bottom = t2.z - eye,
+    z = eye,
+    x = t1.x,
+    y = t1.y,
+    dx = t2.x - t1.x,
+    dy = t2.y - t1.y,
+    t2x = t2.x,
+    t2y = t2.y,
+  }
+  world.validcount = (world.validcount or 0) + 1
+  if (world.numnodes or 0) == 0 then
+    return cross_sight_subsector(world, 0, st)
   end
-  local x1, y1, x2, y2 = t1.x, t1.y, t2.x, t2.y
-  local margin = math.floor(FRACUNIT / 64)
-  for i = 1, #world.lines do
-    local ln = world.lines[i]
-    local open = false
-    if ln.backsector ~= nil then
-      local opentop, openbottom = M.line_opening(ln)
-      open = opentop - openbottom > 0
-    end
-    if not open then
-      local frac = intercept_frac(x1, y1, x2, y2, ln)
-      if frac ~= nil and margin < frac and frac < FRACUNIT - margin then
-        return false
-      end
-    end
-  end
-  return true
+  return cross_sight_bsp(world, world.numnodes - 1, st)
 end
 
 function M.thing_height_clip(world, thing)
@@ -1245,34 +1529,60 @@ function M.thing_height_clip(world, thing)
   return thing.ceilingz - thing.floorz >= (thing.height or 0)
 end
 
-function M.change_sector(world, sector, crush)
+local MF_DROPPED = 131072
+
+function M.change_sector(world, sector, crush, game)
   local nofit = false
-  local mobjs = world.mobjs or {}
-  for i = 1, #mobjs do
-    local thing = mobjs[i]
-    if M.point_in_subsector(world, thing.x, thing.y).sector == sector then
-      if not M.thing_height_clip(world, thing) then
-        if (thing.health or 0) <= 0 then
-          thing.flags = band(thing.flags or 0, bnot(MF_SOLID))
-          thing.height = 0
-        elseif has(thing.flags, MF_SHOOTABLE) then
-          nofit = true
-          if crush then
-            thing.health = thing.health - 10
-            if thing.player then
-              thing.player.health = thing.health
-            end
-            if thing.health <= 0 then
-              thing.health = 0
-              if thing.player then
-                thing.player.health = 0
-              end
-              thing.flags = band(thing.flags or 0, bnot(MF_SOLID))
-              thing.height = 0
-            end
-          end
-        end
+  local thinker = require("thinker")
+  local info = require("info")
+  local leveltime = 0
+  if game then
+    leveltime = game.leveltime or 0
+  end
+  local seen = {}
+  local bb = sector.blockbox or { 0, 0, 0, 0 }
+  local function pit(thing)
+    if seen[thing] then
+      return true
+    end
+    seen[thing] = true
+    if M.thing_height_clip(world, thing) then
+      return true
+    end
+    if (thing.health or 0) <= 0 then
+      if game then
+        thinker.set_mobj_state(thing, info.S_GIBS, world, game)
       end
+      thing.flags = band(thing.flags or 0, bnot(MF_SOLID))
+      thing.height = 0
+      thing.radius = 0
+      return true
+    end
+    if band(thing.flags or 0, MF_DROPPED) ~= 0 then
+      thinker.remove_mobj(world, thing)
+      return true
+    end
+    if not has(thing.flags, MF_SHOOTABLE) then
+      return true
+    end
+    nofit = true
+    if crush and game and band(leveltime, 3) == 0 then
+      game.damage_mobj(thing, nil, 10)
+      local blood = thinker.spawn_mobj(
+        world, thing.x, thing.y, thing.z + math.floor((thing.height or 0) / 2), info.MT_BLOOD, game
+      )
+      blood.momx = (rng.p_random() - rng.p_random()) * 4096
+      blood.momy = (rng.p_random() - rng.p_random()) * 4096
+    end
+    return true
+  end
+  local xl = bb[BOXLEFT] or 0
+  local xh = bb[BOXRIGHT] or 0
+  local yl = bb[BOXBOTTOM] or 0
+  local yh = bb[BOXTOP] or 0
+  for bx = xl, xh do
+    for by = yl, yh do
+      block_things(world, bx, by, pit)
     end
   end
   return nofit

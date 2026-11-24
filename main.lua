@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -44,7 +44,7 @@ local function take_args(argv)
     episode = 1,
     mapn = 1,
     skill = 2,
-    show_fps = false,
+    show_fps = true,
     crt = false,
     nomonsters = false,
     fastparm = false,
@@ -52,6 +52,8 @@ local function take_args(argv)
     nosound = false,
     nomusic = false,
     nocheats = false,
+    timedemo = nil,
+    playdemo = nil,
   }
   local i = 1
   argv = argv or {}
@@ -98,6 +100,14 @@ local function take_args(argv)
     elseif a == "-nocheats" then
       out.nocheats = true
       i = i + 1
+    elseif a == "-timedemo" and argv[i + 1] then
+      out.timedemo = argv[i + 1]
+      out.nosound = true
+      out.nomusic = true
+      i = i + 2
+    elseif a == "-playdemo" and argv[i + 1] then
+      out.playdemo = argv[i + 1]
+      i = i + 2
     elseif a:lower():sub(-4) == ".wad" and a:sub(1, 1) ~= "-" then
       out.iwad = a
       i = i + 1
@@ -194,6 +204,26 @@ local function apply_carry(player, prev)
   player.playerstate = 0
 end
 
+local function commercial_wad()
+  return wad.check_num_for_name(w, "MAP01") >= 0
+end
+
+local function arm_title(self)
+  self.gamestate = "title"
+  self.carry = nil
+  self.player = nil
+  self.world = nil
+  self.specials = nil
+  self.wi = nil
+  self.finale = nil
+  self.wiping = false
+  self.demo_playback = false
+  self.demo_buffer = nil
+  self.demo_sequence = -1
+  self.advancedemo = true
+  self.page_patch = title
+end
+
 local function lump_patch(name)
   local n = wad.check_num_for_name(w, name)
   if n < 0 then
@@ -203,9 +233,7 @@ local function lump_patch(name)
 end
 
 function game.touch_special(special, toucher)
-  if player_mod.take_key(special, toucher) and game.world then
-    collision.unset_thing_position(game.world, special)
-  end
+  player_mod.touch_special(game, special, toucher)
 end
 
 function game.use_special(line, thing, side)
@@ -309,12 +337,7 @@ function game.finish_finale(self)
     self.start_level(self)
     return
   end
-  self.gamestate = "title"
-  self.carry = nil
-  self.player = nil
-  self.world = nil
-  self.specials = nil
-  sound_mod.play_title_music(sound)
+  arm_title(self)
 end
 
 function game.advance(self)
@@ -329,12 +352,7 @@ function game.advance(self)
     lump = string.format("MAP%02d", self.pending_map)
   end
   if wad.check_num_for_name(w, lump) < 0 then
-    self.gamestate = "title"
-    self.carry = nil
-    self.player = nil
-    self.world = nil
-    self.specials = nil
-    sound_mod.play_title_music(sound)
+    arm_title(self)
     return
   end
   self.mapn = self.pending_map
@@ -347,13 +365,7 @@ function game.end_game(self)
   end
   self.finale = nil
   self.wi = nil
-  self.wiping = false
-  self.gamestate = "title"
-  self.carry = nil
-  self.player = nil
-  self.world = nil
-  self.specials = nil
-  sound_mod.play_title_music(sound)
+  arm_title(self)
 end
 
 function game.save_game(self, slot, desc)
@@ -373,6 +385,12 @@ function game.slot_desc(self, slot)
 end
 
 function game.start_level(self)
+  if not self.keep_demo then
+    self.demo_playback = false
+    self.advancedemo = false
+    self.demo_buffer = nil
+  end
+  self.keep_demo = false
   if self.automap then
     am_map.reset_level(self.automap)
   end
@@ -383,7 +401,11 @@ function game.start_level(self)
   self.res = res
   self.player = nil
   self.specials = specials_mod.new(world, res, sound)
+  self.specials.game = self
   local kills, items = thinker.spawn_map(world, self.skill, self)
+  if self.specials then
+    specials_mod.spawn_specials(self.specials)
+  end
   local secrets = 0
   for i = 1, #world.sectors do
     if world.sectors[i].special == 9 then
@@ -417,6 +439,219 @@ function game.start_level(self)
   ))
 end
 
+local function map_unit(v)
+  v = v or 0
+  if v >= 0 then
+    return math.floor(v / 65536)
+  end
+  return -math.floor((-v) / 65536)
+end
+
+local function sync_log()
+  if not game.timingdemo or game.sync_fh == nil or game.player == nil or game.player.mo == nil then
+    return
+  end
+  local mo = game.player.mo
+  local n, sx = 0, 0
+  local compat = require("compat")
+  for i = 1, #game.world.mobjs do
+    local m = game.world.mobjs[i]
+    if compat.band(m.flags or 0, 4194304) ~= 0 and (m.health or 0) > 0 then
+      n = n + 1
+      sx = sx + map_unit(m.x)
+    end
+  end
+  local ammo = 0
+  if game.player.ammo then
+    ammo = game.player.ammo[3] or 0
+  end
+  game.sync_fh:write(string.format(
+    "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+    game.leveltime or 0,
+    game.player.health or 0,
+    game.player.armorpoints or 0,
+    map_unit(mo.x), map_unit(mo.y), map_unit(mo.z), map_unit(mo.floorz),
+    math.floor(mo.momx or 0), math.floor(mo.momy or 0), math.floor(mo.angle or 0),
+    n, sx, rng.index(),
+    game.player.readyweapon or 0, ammo
+  ))
+end
+
+local function finish_demo()
+  game.demo_playback = false
+  game.demo_buffer = nil
+  if game.timingdemo or game.singledemo then
+    game.running = false
+    return
+  end
+  game.advancedemo = true
+end
+
+local function read_demo_ticcmd()
+  local buf = game.demo_buffer
+  local p = game.demo_p or 1
+  local need = 4
+  if game.longtics then
+    need = 5
+  end
+  if buf == nil or p + need - 1 > #buf or buf:byte(p) == 128 then
+    finish_demo()
+    return nil
+  end
+  local function sbyte()
+    local n = buf:byte(game.demo_p)
+    game.demo_p = game.demo_p + 1
+    if n >= 128 then
+      n = n - 256
+    end
+    return n
+  end
+  game.demo_p = p
+  local cmd = player_mod.empty_cmd()
+  cmd.forwardmove = sbyte()
+  cmd.sidemove = sbyte()
+  if game.longtics then
+    local low = buf:byte(game.demo_p)
+    game.demo_p = game.demo_p + 1
+    local high = buf:byte(game.demo_p)
+    game.demo_p = game.demo_p + 1
+    cmd.angleturn = low + high * 256
+  else
+    cmd.angleturn = buf:byte(game.demo_p) * 256
+    game.demo_p = game.demo_p + 1
+  end
+  if cmd.angleturn >= 32768 then
+    cmd.angleturn = cmd.angleturn - 65536
+  end
+  cmd.buttons = buf:byte(game.demo_p)
+  game.demo_p = game.demo_p + 1
+  return cmd
+end
+
+local function play_demo(name, timed)
+  local lump = string.upper(name)
+  if wad.check_num_for_name(w, lump) < 0 then
+    print("demo ausente: " .. lump)
+    return false
+  end
+  local data = wad.cache_lump_name(w, lump)
+  if data == nil or #data < 4 then
+    return false
+  end
+  game.demo_buffer = data
+  game.demo_p = 1
+  local ver = data:byte(1)
+  game.demo_p = 2
+  game.longtics = false
+  if ver <= 4 then
+    game.demo_p = 1
+  elseif ver == 111 then
+    game.longtics = true
+  end
+  if game.demo_p + 2 > #data then
+    return false
+  end
+  local skill = data:byte(game.demo_p)
+  game.demo_p = game.demo_p + 1
+  local episode = data:byte(game.demo_p)
+  game.demo_p = game.demo_p + 1
+  local mapn = data:byte(game.demo_p)
+  game.demo_p = game.demo_p + 1
+  if ver > 4 then
+    if game.demo_p + 8 > #data then
+      return false
+    end
+    game.demo_p = game.demo_p + 1
+    game.respawnparm = data:byte(game.demo_p) ~= 0
+    game.demo_p = game.demo_p + 1
+    game.fastparm = data:byte(game.demo_p) ~= 0
+    game.demo_p = game.demo_p + 1
+    game.nomonsters = data:byte(game.demo_p) ~= 0
+    game.demo_p = game.demo_p + 1
+    game.demo_p = game.demo_p + 5
+  end
+  if skill < 0 then
+    skill = 0
+  end
+  if skill > 4 then
+    skill = 4
+  end
+  game.skill = skill
+  if episode >= 1 then
+    game.episode = episode
+  end
+  if mapn >= 1 then
+    game.mapn = mapn
+  end
+  game.keep_demo = true
+  game.timingdemo = timed and true or false
+  game.demo_playback = true
+  if timed then
+    game.timedemo_name = string.lower(name)
+    if game.sync_fh then
+      game.sync_fh:close()
+      game.sync_fh = nil
+    end
+    game.sync_fh = io.open("_sync_" .. game.timedemo_name .. ".log", "w")
+    print("timedemo " .. lump)
+  end
+  game.start_level(game)
+  game.gamestate = "view"
+  return true
+end
+
+local credit_patch = lump_patch("CREDIT")
+local help2_patch = lump_patch("HELP2")
+
+local function show_page(patch, tics, music)
+  game.page_tic = tics
+  game.page_patch = patch or title
+  game.gamestate = "title"
+  game.demo_playback = false
+  game.demo_buffer = nil
+  game.player = nil
+  game.world = nil
+  game.specials = nil
+  if music then
+    sound_mod.play_title_music(sound)
+  end
+end
+
+local function do_advance_demo()
+  for _ = 1, 8 do
+    game.advancedemo = false
+    game.demo_playback = false
+    game.demo_sequence = ((game.demo_sequence or -1) + 1) % 6
+    local seq = game.demo_sequence
+    if seq == 0 then
+      show_page(title, commercial_wad() and TICRATE * 11 or 170, true)
+      return
+    elseif seq == 1 then
+      if play_demo("demo1", false) then
+        return
+      end
+    elseif seq == 2 then
+      show_page(credit_patch or title, 200, false)
+      return
+    elseif seq == 3 then
+      if play_demo("demo2", false) then
+        return
+      end
+    elseif seq == 4 then
+      if commercial_wad() then
+        show_page(title, TICRATE * 11, true)
+      elseif wad.check_num_for_name(w, "E2M1") < 0 then
+        show_page(help2_patch or credit_patch or title, 200, false)
+      else
+        show_page(credit_patch or title, 200, false)
+      end
+      return
+    elseif play_demo("demo3", false) then
+      return
+    end
+  end
+end
+
 local menu = menu_mod.new(w, sound, game)
 game.menu = menu
 game.status = status_mod.new(w)
@@ -444,11 +679,21 @@ end
 if opts.nomusic then
   sound.music_enabled = false
 end
-if game.warp then
+if opts.timedemo then
+  play_demo(opts.timedemo, true)
+elseif opts.playdemo then
+  game.singledemo = true
+  print("playdemo " .. string.upper(opts.playdemo))
+  if not play_demo(opts.playdemo, false) then
+    os.exit(1)
+  end
+elseif game.warp then
   game.start_level(game)
   game.wipe_state = "view"
 else
-  sound_mod.play_title_music(sound)
+  game.demo_sequence = -1
+  game.advancedemo = true
+  do_advance_demo()
 end
 
 local function paint_view()
@@ -538,7 +783,7 @@ local function paint_state()
     finale_mod.draw(game.finale, fb)
   else
     v.fill(fb, 0)
-    v.draw_patch(fb, 0, 0, title)
+    v.draw_patch(fb, 0, 0, game.page_patch or title)
   end
 end
 
@@ -546,7 +791,7 @@ local function draw_fps()
   if not game.show_fps or not game.status then
     return
   end
-  local text = game.fps_text or "0 FPS"
+  local text = game.fps_text or "0 FPS  avg 0.0"
   local width = status_mod.text_width(game.status, text)
   local x = v.SCREENWIDTH - 6 - width
   if x < 0 then
@@ -592,7 +837,76 @@ local accum = 0
 local last = video.ticks()
 local fps_n = 0
 local fps_t = last
-game.fps_text = "0 FPS"
+local fps_avg_n = 0
+local fps_avg_t = last
+game.fps_text = "0 FPS  avg 0.0"
+
+local function run_view_tic()
+  if not (game.gamestate == "view" and game.player and game.world) then
+    return false
+  end
+  if game.automap and not game.timingdemo then
+    am_map.ticker(game.automap, game)
+  end
+  if game.demo_playback then
+    local cmd = read_demo_ticcmd()
+    if cmd == nil then
+      return true
+    end
+    game.player.cmd = cmd
+  elseif menu.active then
+    game.player.cmd = player_mod.empty_cmd()
+    game.mousex = 0
+    game.mousey = 0
+  else
+    local cmd, heldn = player_mod.build_ticcmd(
+      held, game.turnheld or 0, game.player,
+      game.mousex, game.mousey, game.mouse_sensitivity, game.mouse_fire
+    )
+    game.turnheld = heldn
+    game.player.cmd = cmd
+    game.mousex = 0
+    game.mousey = 0
+  end
+  player_mod.think(game.world, game.player, game, game.leveltime or 0)
+  if game.player and game.player.playerstate == player_mod.PST_REBORN then
+    game.start_level(game)
+    return false
+  end
+  thinker.tick(game.world, game, false)
+  if game.specials then
+    specials_mod.tick_lights_early(game.specials)
+  end
+  thinker.tick(game.world, game, true)
+  if game.specials then
+    specials_mod.tick(game.specials)
+  end
+  if game.specials and game.specials.exit_requested then
+    game.begin_exit(game)
+    return true
+  end
+  sync_log()
+  game.leveltime = (game.leveltime or 0) + 1
+  player_mod.tick_fx(game.world)
+  if game.status then
+    status_mod.ticker(game.status, game.player)
+  end
+  return false
+end
+
+if game.timingdemo then
+  local t0 = video.ticks()
+  while game.running and game.demo_playback and game.gamestate == "view" do
+    run_view_tic()
+  end
+  if game.sync_fh then
+    game.sync_fh:close()
+    game.sync_fh = nil
+  end
+  print(string.format("timed %d gametics in %d realtics", game.leveltime or 0, video.ticks() - t0))
+  os.exit(0)
+end
+
 while game.running do
   local events = video.poll()
   for i = 1, #events do
@@ -607,9 +921,36 @@ while game.running do
       end
     elseif ev.down and ev.key == "quit" then
       game.running = false
+    elseif ev.down and ev.key == "f11" then
+      game.show_fps = not game.show_fps
+      fps_n = 0
+      fps_avg_n = 0
+      fps_t = video.ticks()
+      fps_avg_t = fps_t
+      game.fps_text = "0 FPS  avg 0.0"
+      held[ev.key] = nil
+      dirty = true
     elseif ev.key ~= "" then
       if ev.down and ev.key == "return" and (held.alt or ev.alt) then
         video.toggle_fullscreen()
+      elseif ev.down and game.demo_playback and game.singledemo then
+        game.running = false
+      elseif ev.down and game.demo_playback and not game.timingdemo then
+        game.demo_playback = false
+        game.demo_buffer = nil
+        game.advancedemo = false
+        game.gamestate = "title"
+        game.player = nil
+        game.world = nil
+        game.specials = nil
+        game.page_patch = title
+        game.page_tic = commercial_wad() and (TICRATE * 11) or 170
+        sound_mod.play_title_music(sound)
+        if not menu.active then
+          menu_mod.start(menu)
+        end
+        held[ev.key] = nil
+        dirty = true
       elseif ev.down then
         local block_menu = (game.gamestate == "intermission" or game.gamestate == "finale")
           and not menu.active and ev.key == "return"
@@ -639,9 +980,6 @@ while game.running do
             elseif ev.key == "minus" and game.screen_size > 0 then
               game.screen_size = game.screen_size - 1
               dirty = true
-            elseif ev.key == "f11" then
-              game.show_fps = not game.show_fps
-              dirty = true
             end
           end
         end
@@ -668,41 +1006,20 @@ while game.running do
     if menu_mod.ticker(menu) then
       dirty = true
     end
-    if game.gamestate == "view" and game.player and game.world then
-      if game.automap then
-        am_map.ticker(game.automap, game)
+    if not menu.active and game.advancedemo then
+      do_advance_demo()
+      dirty = true
+    end
+    if game.gamestate == "title" then
+      if not menu.active then
+        game.page_tic = (game.page_tic or 0) - 1
+        if game.page_tic < 0 then
+          game.advancedemo = true
+        end
       end
-      if menu.active then
-        game.player.cmd = player_mod.empty_cmd()
-        game.mousex = 0
-        game.mousey = 0
-      else
-        local cmd, heldn = player_mod.build_ticcmd(
-          held, game.turnheld or 0, game.player,
-          game.mousex, game.mousey, game.mouse_sensitivity, game.mouse_fire
-        )
-        game.turnheld = heldn
-        game.player.cmd = cmd
-        game.mousex = 0
-        game.mousey = 0
-      end
-      player_mod.think(game.world, game.player, game, game.leveltime or 0)
-      player_mod.tick_fx(game.world)
-      if game.player and game.player.playerstate == player_mod.PST_REBORN then
-        game.start_level(game)
-      else
-        thinker.tick(game.world, game)
-        if game.specials then
-          specials_mod.tick(game.specials)
-        end
-        if game.specials and game.specials.exit_requested then
-          game.begin_exit(game)
-          break
-        end
-        game.leveltime = (game.leveltime or 0) + 1
-        if game.status then
-          status_mod.ticker(game.status, game.player)
-        end
+    elseif game.gamestate == "view" and game.player and game.world then
+      if run_view_tic() then
+        break
       end
       dirty = true
     elseif game.gamestate == "intermission" and game.wi then
@@ -733,13 +1050,19 @@ while game.running do
   video.mouse_relative(game.use_mouse and game.gamestate == "view" and not menu.active)
   video.present(raw)
   video.delay(1)
-  fps_n = fps_n + 1
-  local fps_now = video.ticks()
-  if fps_now - fps_t >= 1000 then
-    game.fps_text = tostring(fps_n) .. " FPS"
-    fps_n = 0
-    fps_t = fps_now
-    if game.show_fps then
+  if game.show_fps then
+    fps_n = fps_n + 1
+    fps_avg_n = fps_avg_n + 1
+    local fps_now = video.ticks()
+    local elapsed = fps_now - fps_avg_t
+    local avg = 0
+    if elapsed > 0 then
+      avg = fps_avg_n * 1000 / elapsed
+    end
+    if fps_now - fps_t >= 1000 then
+      game.fps_text = string.format("%d FPS  avg %.1f", fps_n, avg)
+      fps_n = 0
+      fps_t = fps_now
       dirty = true
     end
   end

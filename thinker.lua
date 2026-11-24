@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -23,9 +23,9 @@ local as_u32 = compat.as_u32
 
 local FRACUNIT = 65536
 local MF_CORPSE = 1048576
+local MF_MISSILE = 65536
 local MF_COUNTKILL = 4194304
 local MF_COUNTITEM = 8388608
-local MF_MISSILE = 65536
 local MF_SKULLFLY = 16777216
 local MF_SPAWNCEILING = 256
 local MF_AMBUSH = 32
@@ -76,7 +76,7 @@ function M.spawn_mobj(world, x, y, z, typ, game)
     target = nil,
     tracer = nil,
     player = nil,
-    movedir = 8,
+    movedir = 0,
     movecount = 0,
     threshold = 0,
     sprite = "",
@@ -170,7 +170,7 @@ function M.mobj_thinker(world, mo, game)
       return
     end
   end
-  if mo.tics ~= -1 then
+  if (mo.tics or -1) ~= -1 then
     mo.tics = mo.tics - 1
     if mo.tics <= 0 then
       M.set_mobj_state(mo, info.STATES[mo.istate][4], world, game)
@@ -317,19 +317,33 @@ function M.spawn_map(world, skill, game)
   return kills, items
 end
 
-function M.tick(world, game)
-  local player = game.player
-  if player == nil or player.mo == nil then
-    return
-  end
-  local list = {}
-  for i = 1, #world.mobjs do
-    list[i] = world.mobjs[i]
-  end
-  for i = 1, #list do
-    local mo = list[i]
-    if mo ~= player.mo and not mo.fx then
-      M.mobj_thinker(world, mo, game)
+function M.tick(world, game, missiles_only)
+  local i = 1
+  while i <= #world.mobjs do
+    local mo = world.mobjs[i]
+    if mo == nil or mo.fx then
+      i = i + 1
+    else
+      local is_missile = band(mo.flags or 0, MF_MISSILE) ~= 0
+      local run = (missiles_only and is_missile) or ((not missiles_only) and not is_missile)
+      if not run then
+        i = i + 1
+      else
+        local nxt = world.mobjs[i + 1]
+        M.mobj_thinker(world, mo, game)
+        if nxt == nil then
+          i = i + 1
+        else
+          local found = nil
+          for j = 1, #world.mobjs do
+            if world.mobjs[j] == nxt then
+              found = j
+              break
+            end
+          end
+          i = found or (i + 1)
+        end
+      end
     end
   end
 end

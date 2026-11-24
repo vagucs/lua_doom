@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -93,7 +93,7 @@ local function play(self, name)
   end
 end
 
-function M.move_plane(world, sector, speed, dest, floor_or_ceiling, direction, crush)
+function M.move_plane(world, sector, speed, dest, floor_or_ceiling, direction, crush, game)
   local last = sector.floorheight
   if floor_or_ceiling ~= 0 then
     last = sector.ceilingheight
@@ -118,7 +118,7 @@ function M.move_plane(world, sector, speed, dest, floor_or_ceiling, direction, c
   else
     sector.ceilingheight = next_h
   end
-  local nofit = collision.change_sector(world, sector, crush and true or false)
+  local nofit = collision.change_sector(world, sector, crush and true or false, game)
   if nofit then
     if not crush or past then
       if floor_or_ceiling == 0 then
@@ -126,7 +126,7 @@ function M.move_plane(world, sector, speed, dest, floor_or_ceiling, direction, c
       else
         sector.ceilingheight = last
       end
-      collision.change_sector(world, sector, crush and true or false)
+      collision.change_sector(world, sector, crush and true or false, game)
     end
     if past then
       return RESULT_PASTDEST
@@ -197,6 +197,14 @@ local function highest_floor(sector)
     if around[i].floorheight > h then
       h = around[i].floorheight
     end
+  end
+  return h
+end
+
+local function turbo_lower_dest(sector)
+  local h = highest_floor(sector)
+  if h ~= sector.floorheight then
+    h = h + 8 * FRACUNIT
   end
   return h
 end
@@ -302,7 +310,6 @@ function M.new(world, res, sound)
       self.switch_map[ib] = ia
     end
   end
-  M.spawn_specials(self)
   return self
 end
 
@@ -369,16 +376,9 @@ local function spawn_fire(self, sector)
 end
 
 local function spawn_door(self, sector, dtype, reverse)
+  -- Tagged doors (EV_DoDoor) do nothing while the sector is already moving.
+  -- Reversing a rising door is only the manual switch, handled in vertical_door.
   if sector.specialdata ~= nil then
-    local door = sector.specialdata
-    if door.kind == "door" and (dtype == VLD_NORMAL or dtype == VLD_BLAZERAISE) then
-      if door.direction == -1 then
-        door.direction = 1
-      else
-        door.direction = -1
-      end
-      return true
-    end
     return false
   end
   local direction = 1
@@ -542,10 +542,10 @@ local function tick_lights(self)
           end
           light.count = 4
         end
-        mark(self)
-      end
+      mark(self)
     end
   end
+end
 end
 
 local function tick_door(self, door)
@@ -571,8 +571,15 @@ local function tick_door(self, door)
   if door.direction == 1 then
     dest = door.topheight
   end
-  local res = M.move_plane(self.world, door.sector, door.speed, dest, 1, door.direction, false)
+  local res = M.move_plane(self.world, door.sector, door.speed, dest, 1, door.direction, false, self.game)
   mark(self)
+  if door.direction == -1 and res == RESULT_CRUSHED then
+    if door.type ~= VLD_BLAZECLOSE and door.type ~= VLD_CLOSE then
+      door.direction = 1
+      play(self, "doropn")
+    end
+    return
+  end
   if res ~= RESULT_PASTDEST then
     return
   end
@@ -598,8 +605,8 @@ end
 local function tick_plat(self, plat)
   if plat.status == PLAT_WAITING then
     plat.count = plat.count - 1
-    if plat.count <= 0 then
-      if plat.sector.floorheight <= plat.low then
+    if plat.count == 0 then
+      if plat.sector.floorheight == plat.low then
         plat.status = PLAT_UP
       else
         plat.status = PLAT_DOWN
@@ -614,8 +621,14 @@ local function tick_plat(self, plat)
     dest = plat.high
     direction = 1
   end
-  local res = M.move_plane(self.world, plat.sector, plat.speed, dest, 0, direction, false)
+  local res = M.move_plane(self.world, plat.sector, plat.speed, dest, 0, direction, plat.crush, self.game)
   mark(self)
+  if plat.status == PLAT_UP and res == RESULT_CRUSHED and not plat.crush then
+    plat.count = plat.wait
+    plat.status = PLAT_DOWN
+    play(self, "pstart")
+    return
+  end
   if res == RESULT_PASTDEST then
     if plat.status == PLAT_DOWN or plat.type == PLAT_PERPETUAL then
       plat.status = PLAT_WAITING
@@ -630,7 +643,7 @@ local function tick_plat(self, plat)
 end
 
 local function tick_floor(self, floor)
-  local res = M.move_plane(self.world, floor.sector, floor.speed, floor.dest, 0, floor.direction, floor.crush)
+  local res = M.move_plane(self.world, floor.sector, floor.speed, floor.dest, 0, floor.direction, floor.crush, self.game)
   mark(self)
   if res == RESULT_PASTDEST then
     if floor.floorpic ~= nil then
@@ -650,7 +663,7 @@ local function tick_ceiling(self, ceil)
       dest = ceil.bottomheight
     end
   end
-  local res = M.move_plane(self.world, ceil.sector, ceil.speed, dest, 1, ceil.direction, ceil.crush)
+  local res = M.move_plane(self.world, ceil.sector, ceil.speed, dest, 1, ceil.direction, ceil.crush, self.game)
   mark(self)
   local bounce = ceil.ctype == CEIL_CRUSHANDRAISE or ceil.ctype == CEIL_FASTCRUSH or ceil.ctype == CEIL_SILENTCRUSH
   if res == RESULT_PASTDEST then
@@ -683,9 +696,12 @@ local function tick_ceiling(self, ceil)
   end
 end
 
+function M.tick_lights_early(self)
+  tick_lights(self)
+end
+
 function M.tick(self)
   local before = self.stamp
-  tick_lights(self)
   for i = 1, #self.scroll_lines do
     local side = self.scroll_lines[i].sides[1]
     if side then
@@ -744,6 +760,9 @@ end
 function M.vertical_door(self, line, thing)
   local player = thing and thing.player
   local spec = line.special
+  if player == nil and (spec == 26 or spec == 27 or spec == 28 or spec == 32 or spec == 33 or spec == 34) then
+    return
+  end
   if (spec == 26 or spec == 32) and player then
     if not player.cards[IT_BLUECARD] and not player.cards[IT_BLUESKULL] then
       player.message = "You need a blue key to open this door"
@@ -767,6 +786,18 @@ function M.vertical_door(self, line, thing)
   end
   local side = line.sides[2]
   if not side or not side.sector then
+    return
+  end
+  local sec = side.sector
+  if sec.specialdata ~= nil and (spec == 1 or spec == 26 or spec == 27 or spec == 28 or spec == 117) then
+    local busy = sec.specialdata
+    if busy.kind == "door" and busy.direction == -1 then
+      busy.direction = 1
+    elseif player and busy.kind == "door" then
+      busy.direction = -1
+    elseif player and busy.kind == "plat" then
+      busy.wait = -1
+    end
     return
   end
   local dtype = VLD_NORMAL
@@ -809,7 +840,7 @@ end
 
 function M.do_plat_dwus(self, line, blaze)
   local ok = false
-  local speed = PLATSPEED
+  local speed = PLATSPEED * 4
   if blaze then
     speed = PLATSPEED * 8
   end
@@ -833,8 +864,8 @@ function M.do_plat_dwus(self, line, blaze)
         count = 0,
         dead = false,
       }
-      if plat.low == plat.high then
-        plat.low = plat.high - 8 * FRACUNIT
+      if plat.low > plat.high then
+        plat.low = plat.high
       end
       sec.specialdata = plat
       self.thinkers[#self.thinkers + 1] = plat
@@ -1083,6 +1114,9 @@ function M.do_plat_raise(self, line, amount, change)
         sec.floorpic = pic
         mark(self)
       end
+      if amount == 0 then
+        sec.special = 0
+      end
       local plat = {
         kind = "plat",
         sector = sec,
@@ -1251,6 +1285,15 @@ function M.use_special(self, line, thing, side)
   if side ~= 0 then
     return false
   end
+  if thing == nil or thing.player == nil then
+    if band(line.flags or 0, 32) ~= 0 then
+      return false
+    end
+    local allow = line.special
+    if allow ~= 1 and allow ~= 32 and allow ~= 33 and allow ~= 34 then
+      return false
+    end
+  end
   local spec = line.special
   if spec == 1 or spec == 26 or spec == 27 or spec == 28 or spec == 31 or spec == 32
     or spec == 33 or spec == 34 or spec == 117 or spec == 118 then
@@ -1286,7 +1329,7 @@ function M.use_special(self, line, thing, side)
     [122] = function() return M.do_plat_dwus(self, line, true) end,
     [18] = function() return M.do_floor(self, line, function(s) return next_highest_floor(s, s.floorheight) end, 1) end,
     [23] = function() return M.do_floor(self, line, lowest_floor, -1) end,
-    [71] = function() return M.do_floor(self, line, highest_floor, -1) end,
+    [71] = function() return M.do_floor(self, line, turbo_lower_dest, -1, FLOORSPEED * 4) end,
     [101] = function() return M.do_floor(self, line, raise_floor_dest, 1) end,
     [102] = function() return M.do_floor(self, line, highest_floor, -1) end,
     [7] = function() return M.do_stairs(self, line, 8 * FRACUNIT, math.floor(FLOORSPEED / 4)) end,
@@ -1309,12 +1352,11 @@ function M.use_special(self, line, thing, side)
     [114] = function() return door(VLD_BLAZERAISE) end,
     [115] = function() return door(VLD_BLAZEOPEN) end,
     [116] = function() return door(VLD_BLAZECLOSE) end,
-    [120] = function() return M.do_plat_dwus(self, line, true) end,
     [123] = function() return M.do_plat_dwus(self, line, true) end,
     [45] = function() return M.do_floor(self, line, highest_floor, -1) end,
     [60] = function() return M.do_floor(self, line, lowest_floor, -1) end,
     [64] = function() return M.do_floor(self, line, raise_floor_dest, 1) end,
-    [70] = function() return M.do_floor(self, line, highest_floor, -1, FLOORSPEED * 4) end,
+    [70] = function() return M.do_floor(self, line, turbo_lower_dest, -1, FLOORSPEED * 4) end,
     [43] = function() return M.do_crusher(self, line, CEIL_LOWERTOFLOOR) end,
     [65] = function() return M.do_floor(self, line, raise_floor_crush_dest, 1, nil, true) end,
     [66] = function() return M.do_plat_raise(self, line, 24 * FRACUNIT, true) end,
@@ -1364,30 +1406,38 @@ function M.teleport(self, line, side, thing)
   if side == 1 or has(thing.flags, MF_MISSILE) then
     return false
   end
+  local info = require("info")
+  local tables = require("tables")
+  local thinker = require("thinker")
   local tag = line.tag
+  local game = self.game
   for i = 1, #self.world.sectors do
     local sector = self.world.sectors[i]
     if sector.tag == tag then
       for n = 1, #self.world.mobjs do
         local dest = self.world.mobjs[n]
-        if dest.doomednum == 14 then
-          local dest_sector = collision.point_in_subsector(self.world, dest.x, dest.y).sector
-          if dest_sector == sector or dest_sector.i_sector == i - 1 then
-            thing.momx, thing.momy, thing.momz = 0, 0, 0
-            collision.unset_thing_position(self.world, thing)
-            thing.x = dest.x
-            thing.y = dest.y
-            local ss = collision.point_in_subsector(self.world, thing.x, thing.y)
-            thing.floorz = ss.sector.floorheight
-            thing.ceilingz = ss.sector.ceilingheight
+        if dest.type == info.MT_TELEPORTMAN then
+          local dest_sector = (dest.subsector or collision.point_in_subsector(self.world, dest.x, dest.y)).sector
+          if dest_sector.i_sector == i - 1 then
+            local oldx, oldy, oldz = thing.x, thing.y, thing.z
+            if not collision.teleport_move(self.world, thing, dest.x, dest.y, game) then
+              return false
+            end
             thing.z = thing.floorz
-            thing.angle = dest.angle
-            collision.set_thing_position(self.world, thing)
             if thing.player then
               thing.player.viewz = thing.z + thing.player.viewheight
+            end
+            thinker.spawn_mobj(self.world, oldx, oldy, oldz, info.MT_TFOG, game)
+            play(self, "telept")
+            local fogx = dest.x + 20 * tables.fine_cos(dest.angle)
+            local fogy = dest.y + 20 * tables.fine_sin(dest.angle)
+            thinker.spawn_mobj(self.world, fogx, fogy, thing.z, info.MT_TFOG, game)
+            play(self, "telept")
+            if thing.player then
               thing.reactiontime = 18
             end
-            play(self, "telept")
+            thing.angle = dest.angle
+            thing.momx, thing.momy, thing.momz = 0, 0, 0
             mark(self)
             return true
           end
@@ -1399,6 +1449,19 @@ function M.teleport(self, line, side, thing)
 end
 
 function M.cross_special(self, line, side, thing)
+  if thing.player == nil then
+    local info = require("info")
+    local typ = thing.type
+    if typ == info.MT_ROCKET or typ == info.MT_PLASMA or typ == info.MT_BFG
+      or typ == info.MT_TROOPSHOT or typ == info.MT_HEADSHOT or typ == info.MT_BRUISERSHOT then
+      return
+    end
+    local allow = line.special
+    if allow ~= 39 and allow ~= 97 and allow ~= 125 and allow ~= 126
+      and allow ~= 4 and allow ~= 10 and allow ~= 88 then
+      return
+    end
+  end
   local spec = line.special
   if spec == 52 then
     self.exit_requested = true
@@ -1435,7 +1498,7 @@ function M.cross_special(self, line, side, thing)
     [25] = function() return M.do_crusher(self, line, CEIL_CRUSHANDRAISE) end,
     [30] = function() return M.raise_to_texture(self, line) end,
     [35] = function() return M.light_turn_on(self, line, 35) end,
-    [36] = function() return M.do_floor(self, line, highest_floor, -1, FLOORSPEED * 4) end,
+    [36] = function() return M.do_floor(self, line, turbo_lower_dest, -1, FLOORSPEED * 4) end,
     [37] = function() return M.lower_and_change(self, line) end,
     [38] = function() return M.do_floor(self, line, lowest_floor, -1) end,
     [39] = function()
@@ -1495,7 +1558,7 @@ function M.cross_special(self, line, side, thing)
     [95] = function() return M.do_plat_raise(self, line, 0, true) end,
     [96] = function() return M.raise_to_texture(self, line) end,
     [97] = function() return M.teleport(self, line, side, thing) end,
-    [98] = function() return M.do_floor(self, line, highest_floor, -1, FLOORSPEED * 4) end,
+    [98] = function() return M.do_floor(self, line, turbo_lower_dest, -1, FLOORSPEED * 4) end,
     [105] = function() return door(VLD_BLAZERAISE, false) end,
     [106] = function() return door(VLD_BLAZEOPEN, false) end,
     [107] = function() return door(VLD_BLAZECLOSE, false) end,

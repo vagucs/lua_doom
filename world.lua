@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -320,6 +320,76 @@ local function load_reject(self, data)
   self.rejectmatrix = data or ""
 end
 
+local MAPBLOCKSHIFT = 23
+local MAXRADIUS = 32 * FRACUNIT
+
+local function group_sector_blockboxes(self)
+  if not self.bmapwidth or self.bmapwidth <= 0 or not self.bmapheight or self.bmapheight <= 0 then
+    return
+  end
+  local shar = compat.shar
+  for i = 1, #self.sectors do
+    local sector = self.sectors[i]
+    local left, right, bottom, top = nil, nil, nil, nil
+    for n = 1, #sector.lines do
+      local li = sector.lines[n]
+      if li.v1 and li.v2 then
+        local verts = { li.v1, li.v2 }
+        for v = 1, 2 do
+          local p = verts[v]
+          if left == nil or p.x < left then
+            left = p.x
+          end
+          if right == nil or p.x > right then
+            right = p.x
+          end
+          if bottom == nil or p.y < bottom then
+            bottom = p.y
+          end
+          if top == nil or p.y > top then
+            top = p.y
+          end
+        end
+      end
+    end
+    if left == nil then
+      sector.blockbox = { 0, 0, 0, 0 }
+    else
+      sector.soundorg = {
+        x = math.floor((right + left) / 2),
+        y = math.floor((top + bottom) / 2),
+      }
+      local block = shar(top - self.bmaporgy + MAXRADIUS, MAPBLOCKSHIFT)
+      if block >= self.bmapheight then
+        block = self.bmapheight - 1
+      end
+      local boxtop = block
+      if boxtop < 0 then
+        boxtop = 0
+      end
+      block = shar(bottom - self.bmaporgy - MAXRADIUS, MAPBLOCKSHIFT)
+      local boxbottom = block
+      if boxbottom < 0 then
+        boxbottom = 0
+      end
+      block = shar(right - self.bmaporgx + MAXRADIUS, MAPBLOCKSHIFT)
+      if block >= self.bmapwidth then
+        block = self.bmapwidth - 1
+      end
+      local boxright = block
+      if boxright < 0 then
+        boxright = 0
+      end
+      block = shar(left - self.bmaporgx - MAXRADIUS, MAPBLOCKSHIFT)
+      local boxleft = block
+      if boxleft < 0 then
+        boxleft = 0
+      end
+      sector.blockbox = { boxleft, boxright, boxbottom, boxtop }
+    end
+  end
+end
+
 function M.setup_level(self, wadfile, res, episode, mapn)
   self.res = res
   local lumpname
@@ -339,6 +409,7 @@ function M.setup_level(self, wadfile, res, episode, mapn)
   load_things(self, wad.cache_lump_num(wadfile, lumpnum + 1))
   load_blockmap(self, wad.cache_lump_num(wadfile, lumpnum + 10))
   load_reject(self, wad.cache_lump_num(wadfile, lumpnum + 9))
+  group_sector_blockboxes(self)
   self.numnodes = #self.nodes
   self.mapname = lumpname
   for i = 1, #self.subsectors do

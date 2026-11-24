@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -40,6 +40,10 @@ local RND = {
 
 function M.clear()
   index = 0
+end
+
+function M.index()
+  return index
 end
 
 function M.p_random()

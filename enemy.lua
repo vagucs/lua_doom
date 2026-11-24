@@ -1,4 +1,4 @@
--- DOOM generic portado do python_doom para Lua com SDL2.
+-- DOOM generic portado do python_doom para Lua com SDL3.
 --
 -- Por Wagner Nunes da Silva
 --
@@ -103,6 +103,9 @@ function M.kill_monster(mo, game, source)
   local thinker = require("thinker")
   local row = mi(mo)
   mo.flags = band(mo.flags, bnot(MF_SHOOTABLE + MF_FLOAT + MF_SKULLFLY))
+  if mo.type ~= info.MT_SKULL then
+    mo.flags = band(mo.flags, bnot(MF_NOGRAVITY))
+  end
   mo.flags = bor(mo.flags, MF_CORPSE + MF_DROPOFF)
   mo.height = math.floor(mo.height / 4)
   if source ~= nil and source.player ~= nil and has(mo.flags, MF_COUNTKILL) then
@@ -117,7 +120,8 @@ function M.kill_monster(mo, game, source)
   if mo.alive == false then
     return
   end
-  mo.tics = mo.tics - band(rng.p_random(), 3)
+  local jitter = band(rng.p_random(), 3)
+  mo.tics = mo.tics - jitter
   if mo.tics < 1 then
     mo.tics = 1
   end
@@ -145,8 +149,11 @@ function M.pain_or_wake(game, target, source)
     end
   end
   target.reactiontime = 0
-  if source ~= nil and source ~= target and target.player == nil then
+  if source ~= nil and source ~= target and target.player == nil
+    and ((target.threshold or 0) == 0 or target.type == info.MT_VILE)
+    and source.type ~= info.MT_VILE then
     target.target = source
+    target.threshold = 100
     if target.istate == row[info.MI_SPAWNSTATE] and row[info.MI_SEESTATE] ~= 0 then
       thinker.set_mobj_state(target, row[info.MI_SEESTATE], game.world, game)
     end
@@ -156,6 +163,14 @@ end
 function M.damage_mobj(game, target, source, damage, inflictor)
   if target == nil or target.alive == false or not has(target.flags, MF_SHOOTABLE) then
     return
+  end
+  if (target.health or 0) <= 0 then
+    return
+  end
+  if has(target.flags, MF_SKULLFLY) then
+    target.momx = 0
+    target.momy = 0
+    target.momz = 0
   end
   if target.player and game.skill == 0 then
     damage = math.floor(damage / 2)
@@ -180,12 +195,18 @@ function M.damage_mobj(game, target, source, damage, inflictor)
   if target.player then
     local player_mod = require("player")
     player_mod.damage_mobj(target, source, damage, inflictor)
-    return
-  end
-  target.health = (target.health or 0) - damage
-  if target.health <= 0 then
-    M.kill_monster(target, game, source)
-    return
+    if (target.health or 0) <= 0 then
+      target.alive = true
+      M.kill_monster(target, game, source)
+      target.alive = false
+      return
+    end
+  else
+    target.health = (target.health or 0) - damage
+    if target.health <= 0 then
+      M.kill_monster(target, game, source)
+      return
+    end
   end
   M.pain_or_wake(game, target, source)
 end
@@ -224,7 +245,7 @@ function M.noise_alert(world, emitter, game)
   if emitter == nil then
     return
   end
-  local sec = collision.point_in_subsector(world, emitter.x, emitter.y).sector
+  local sec = (emitter.subsector or collision.point_in_subsector(world, emitter.x, emitter.y)).sector
   world.validcount = (world.validcount or 0) + 1
   recursive_sound(world, sec, 0, emitter)
 end
@@ -234,10 +255,10 @@ local function play_see_sound(mo, game)
   if s == nil or s == "" then
     return
   end
-  if s == "posit1" then
+  if s == "posit1" or s == "posit2" or s == "posit3" then
     local names = { [0] = "posit1", "posit2", "posit3" }
     s = names[rng.p_random() % 3]
-  elseif s == "bgsit1" then
+  elseif s == "bgsit1" or s == "bgsit2" then
     local names = { [0] = "bgsit1", "bgsit2" }
     s = names[rng.p_random() % 2]
   end
@@ -249,10 +270,10 @@ local function play_death_sound(mo, game)
   if s == nil or s == "" then
     return
   end
-  if s == "podth1" then
+  if s == "podth1" or s == "podth2" or s == "podth3" then
     local names = { [0] = "podth1", "podth2", "podth3" }
     s = names[rng.p_random() % 3]
-  elseif s == "bgdth1" then
+  elseif s == "bgdth1" or s == "bgdth2" then
     local names = { [0] = "bgdth1", "bgdth2" }
     s = names[rng.p_random() % 2]
   end
@@ -299,10 +320,25 @@ local function look_for_players(world, mo, player_mo, allaround)
 end
 
 local function face_target(mo, target)
+  mo.flags = band(mo.flags, bnot(MF_AMBUSH))
   mo.angle = collision.angle_to(mo.x, mo.y, target.x, target.y)
   if has(target.flags, MF_SHADOW) then
     mo.angle = as_u32(mo.angle + (rng.p_random() - rng.p_random()) * 2097152)
   end
+end
+
+local function check_melee_range(world, mo)
+  local target = mo.target
+  if target == nil then
+    return false
+  end
+  local row = info.MOBJINFO[target.type or 0]
+  local rad = row and row[info.MI_RADIUS] or 0
+  local dist = collision.approx_distance(target.x - mo.x, target.y - mo.y)
+  if dist >= MELEERANGE - 20 * FRACUNIT + rad then
+    return false
+  end
+  return collision.check_sight(world, mo, target)
 end
 
 local function face_movedir(mo)
@@ -446,7 +482,6 @@ local function new_chase_dir(world, mo, game)
     end
   end
   mo.movedir = DI_NODIR
-  mo.movecount = band(rng.p_random(), 15)
 end
 
 local function missile_ok(world, mo, target, dist, has_melee)
@@ -490,7 +525,7 @@ local function look(world, mo, player_mo, game)
   local thinker = require("thinker")
   mo.threshold = 0
   local see = false
-  local sec = collision.point_in_subsector(world, mo.x, mo.y).sector
+  local sec = (mo.subsector or collision.point_in_subsector(world, mo.x, mo.y)).sector
   local targ = sec.soundtarget
   if targ ~= nil and has(targ.flags, MF_SHOOTABLE) then
     mo.target = targ
@@ -505,8 +540,6 @@ local function look(world, mo, player_mo, game)
       return
     end
   end
-  mo.movedir = DI_NODIR
-  mo.movecount = 0
   play_see_sound(mo, game)
   thinker.set_mobj_state(mo, mi(mo)[info.MI_SEESTATE], world, game)
 end
@@ -546,7 +579,7 @@ local function chase(world, mo, player_mo, game)
   local melee_st = row[info.MI_MELEESTATE]
   local miss_st = row[info.MI_MISSILESTATE]
   local dist = collision.approx_distance(target.x - mo.x, target.y - mo.y)
-  local melee_range = MELEERANGE - 20 * FRACUNIT + (target.radius or 0)
+  local melee_range = MELEERANGE - 20 * FRACUNIT + (info.MOBJINFO[target.type or 0][info.MI_RADIUS] or 0)
   if melee_st ~= 0 and dist < melee_range and collision.check_sight(world, mo, target) then
     local atk = row[info.MI_ATTACKSOUND]
     if atk ~= nil and atk ~= "" then
@@ -635,28 +668,43 @@ function M.spawn_player_missile(world, source, kind)
   return mo
 end
 
+local MAPBLOCKSHIFT = 23
+local MAXRADIUS = 32 * FRACUNIT
+
 local function radius_attack(world, spot, source, damage, game)
-  local list = {}
-  for i = 1, #world.mobjs do
-    list[i] = world.mobjs[i]
-  end
-  for i = 1, #list do
-    local other = list[i]
-    if other ~= spot and has(other.flags, MF_SHOOTABLE) and other.type ~= info.MT_CYBORG and other.type ~= info.MT_SPIDER then
-      local dx = math.abs(other.x - spot.x)
-      local dy = math.abs(other.y - spot.y)
-      local dist = dx
-      if dy > dx then
-        dist = dy
-      end
-      dist = dist - (other.radius or 0)
-      if dist < 0 then
-        dist = 0
-      end
-      dist = shar(dist, 16)
-      if dist < damage and collision.check_sight(world, other, spot) then
-        local src = source or spot
-        game.damage_mobj(other, src, damage - dist, spot)
+  local dist_map = damage * FRACUNIT + MAXRADIUS
+  local yh = shar(spot.y + dist_map - world.bmaporgy, MAPBLOCKSHIFT)
+  local yl = shar(spot.y - dist_map - world.bmaporgy, MAPBLOCKSHIFT)
+  local xh = shar(spot.x + dist_map - world.bmaporgx, MAPBLOCKSHIFT)
+  local xl = shar(spot.x - dist_map - world.bmaporgx, MAPBLOCKSHIFT)
+  local src = source or spot
+  local width = world.bmapwidth or 0
+  local height = world.bmapheight or 0
+  local links = world.blocklinks
+  for y = yl, yh do
+    for x = xl, xh do
+      if x >= 0 and y >= 0 and x < width and y < height and links then
+        local other = links[y * width + x + 1]
+        while other do
+          local nxt = other.bnext
+          if has(other.flags, MF_SHOOTABLE) and other.type ~= info.MT_CYBORG and other.type ~= info.MT_SPIDER then
+            local dx = math.abs(other.x - spot.x)
+            local dy = math.abs(other.y - spot.y)
+            local dist = dx
+            if dy > dx then
+              dist = dy
+            end
+            dist = dist - (other.radius or 0)
+            if dist < 0 then
+              dist = 0
+            end
+            dist = shar(dist, 16)
+            if dist < damage and collision.check_sight(world, other, spot) then
+              game.damage_mobj(other, src, damage - dist, spot)
+            end
+          end
+          other = nxt
+        end
       end
     end
   end
@@ -702,18 +750,21 @@ end
 
 function M.explode_missile(world, mo, game, hit)
   local thinker = require("thinker")
-  if hit == nil then
-    hit = mo.struck or missile_victim(world, mo)
-  end
   mo.struck = nil
-  if hit ~= nil and game and game.damage_mobj then
-    local src = mo.target or mo
-    local dmg = mo.damage or mi(mo)[info.MI_DAMAGE]
-    game.damage_mobj(hit, src, dmg * ((rng.p_random() % 8) + 1), mo)
-  end
   mo.momx, mo.momy, mo.momz = 0, 0, 0
-  mo.flags = band(mo.flags, bnot(MF_MISSILE))
   thinker.set_mobj_state(mo, mi(mo)[info.MI_DEATHSTATE], world, game)
+  if mo.alive == false then
+    return
+  end
+  mo.tics = (mo.tics or 0) - band(rng.p_random(), 3)
+  if mo.tics < 1 then
+    mo.tics = 1
+  end
+  mo.flags = band(mo.flags, bnot(MF_MISSILE))
+  local sfx = mi(mo)[info.MI_DEATHSOUND]
+  if sfx ~= nil and sfx ~= "" and sfx ~= "0" and sfx ~= 0 and game then
+    play(game, sfx)
+  end
 end
 
 function M.p_xy_movement(world, mo, game)
@@ -1139,8 +1190,7 @@ function M.call_action(name, mo, world, game)
       return
     end
     face_target(mo, mo.target)
-    local dist = collision.approx_distance(mo.target.x - mo.x, mo.target.y - mo.y)
-    if dist < MELEERANGE + mo.radius then
+    if check_melee_range(world, mo) then
       play(game, "claw")
       game.damage_mobj(mo.target, mo, ((rng.p_random() % 8) + 1) * 3)
     else
@@ -1151,18 +1201,16 @@ function M.call_action(name, mo, world, game)
       return
     end
     face_target(mo, mo.target)
-    local dist = collision.approx_distance(mo.target.x - mo.x, mo.target.y - mo.y)
-    if dist < MELEERANGE + mo.radius then
-      game.damage_mobj(mo.target, mo, ((rng.p_random() % 8) + 1) * 4)
+    if check_melee_range(world, mo) then
+      game.damage_mobj(mo.target, mo, ((rng.p_random() % 10) + 1) * 4)
     end
   elseif name == "HeadAttack" then
     if mo.target == nil then
       return
     end
     face_target(mo, mo.target)
-    local dist = collision.approx_distance(mo.target.x - mo.x, mo.target.y - mo.y)
-    if dist < MELEERANGE + mo.radius then
-      game.damage_mobj(mo.target, mo, ((rng.p_random() % 8) + 1) * 10)
+    if check_melee_range(world, mo) then
+      game.damage_mobj(mo.target, mo, ((rng.p_random() % 6) + 1) * 10)
     else
       M.spawn_missile_mt(world, mo, mo.target, info.MT_HEADSHOT, game)
     end
@@ -1170,9 +1218,7 @@ function M.call_action(name, mo, world, game)
     if mo.target == nil then
       return
     end
-    face_target(mo, mo.target)
-    local dist = collision.approx_distance(mo.target.x - mo.x, mo.target.y - mo.y)
-    if dist < MELEERANGE + mo.radius then
+    if check_melee_range(world, mo) then
       game.damage_mobj(mo.target, mo, ((rng.p_random() % 8) + 1) * 10)
     else
       M.spawn_missile_mt(world, mo, mo.target, info.MT_BRUISERSHOT, game)
@@ -1269,10 +1315,9 @@ function M.call_action(name, mo, world, game)
       return
     end
     face_target(mo, mo.target)
-    local dist = collision.approx_distance(mo.target.x - mo.x, mo.target.y - mo.y)
-    if dist < MELEERANGE + mo.radius then
+    if check_melee_range(world, mo) then
       play(game, "skepch")
-      game.damage_mobj(mo.target, mo, ((rng.p_random() % 8) + 1) * 6)
+      game.damage_mobj(mo.target, mo, ((rng.p_random() % 10) + 1) * 6)
     end
   elseif name == "SkelMissile" then
     if mo.target == nil then
